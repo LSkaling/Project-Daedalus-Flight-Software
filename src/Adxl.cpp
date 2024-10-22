@@ -17,7 +17,7 @@ bool Adxl::begin()
     }
 
     writeRegister(0x2D, 0x08); // Power on the sensor
-    writeRegister(0x31, 0x0B); // Resolution and range: ±16g or appropriate setting for ADXL375
+    writeRegister(0x31, 0x09); // Resolution and range: ±16g or appropriate setting for ADXL375
     return true;
 }
 

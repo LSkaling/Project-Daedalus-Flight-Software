@@ -7,6 +7,8 @@
 
 #define SD_CS_PIN PA4  // Chip Select pin for SD card
 
+const bool debug = false; //Changes if Serial is used
+
 File dataFile;
 
 Adxl adxl345 = Adxl(0x1D, ADXL345);
@@ -27,20 +29,24 @@ const int sense1 = PB1;
 const int voltage_sense = PA2;
 
 int millisSinceLastLog = 0;
+int millisSinceLastBeep = 0;
 
 int getNextLogFileNumber() {
   int logNumber = 0;
   
   File root = SD.open("/");
+  Serial1.println("Files found on the SD card:");
   while (true) {
     File entry = root.openNextFile();
+    Serial1.print("  ");
+    Serial1.println(entry.name());
     if (!entry) {
       // No more files
       break;
     }
     
     String fileName = entry.name();
-    if (fileName.startsWith("log") && fileName.endsWith(".txt")) {
+    if (fileName.startsWith("LOG") && fileName.endsWith(".TXT")) {
       // Extract the number part of the filename (e.g., "log3.txt" -> 3)
       int currentLogNumber = fileName.substring(3, fileName.length() - 4).toInt();
       if (currentLogNumber > logNumber) {
@@ -81,7 +87,7 @@ void setup() {
   Wire.begin();  
 
   // Wait for Serial1 port to connect (only needed on some boards)
-  while (!Serial1);
+  while (!Serial1 && debug);
   delay(4000);
   // for(int i = 0; i < 20; i++){
   //   Serial1.println(i);
@@ -96,12 +102,19 @@ void setup() {
   }
   Serial1.println("Initialization done.");
 
-  // Open or create the file
-  dataFile = SD.open("log.txt", FILE_WRITE);
+  // Find the next available log file number
+  int logNumber = getNextLogFileNumber();
+  String logFileName = "log" + String(logNumber) + ".txt";
+  
+  Serial1.print("Creating log file: ");
+  Serial1.println(logFileName);
+
+  // Create the log file
+  dataFile = SD.open(logFileName, FILE_WRITE);
   if (!dataFile) {
-    Serial1.println("Error opening log.txt");
+    Serial1.println("Error opening log file.");
     while (1);
-  }  
+  }
 
   Serial1.println("ADXL345 Sensor Test");
 
@@ -123,6 +136,9 @@ void setup() {
     delay(1000);
   }
   Serial1.println("LPS22 sensor found!");
+
+  dataFile.println("Time (ms),X (g),Y (g),Z (g),X2 (g),Y2 (g),Z2 (g),Pressure (hPa),Temperature (°C)");
+  dataFile.flush();
 
   digitalWrite(rbg_green, LOW);
 
@@ -157,33 +173,38 @@ void loop() { //375 works, 345 does not
   float yg2 = y2 * scale375;
   float zg2 = z2 * scale375;
 
-  Serial1.print("X: ");
-  Serial1.print(xg);
-  Serial1.print(" g, ");
-  Serial1.print(xg2);
-  Serial1.print(" g, Y: ");
-  Serial1.print(yg);
-  Serial1.print(" g, ");
-  Serial1.print(yg2);
-  Serial1.print(" g, Z: ");
-  Serial1.print(zg);
-  Serial1.print(" g, ");
-  Serial1.print(zg2);
-  Serial1.print(" g");
-  Serial1.print(", Pressure: ");
-  Serial1.print(pressure / 4096.0);
-  Serial1.print(" hPa, Temperature: ");
-  Serial1.print(temperature / 100.0);
-  Serial1.print(" °C");
-  // Serial1.print(", Igniter 0: ");
-  // Serial1.print(analogRead(sense0));
-  // Serial1.print(", Igniter 1: ");
-  // Serial1.print(analogRead(sense1));
-  // Serial1.print(", Voltage: ");
-  // Serial1.print(analogRead(voltage_sense));
-  Serial1.println();
+  if(debug){
+
+    Serial1.print("X: ");
+    Serial1.print(xg);
+    Serial1.print(" g, ");
+    Serial1.print(xg2);
+    Serial1.print(" g, Y: ");
+    Serial1.print(yg);
+    Serial1.print(" g, ");
+    Serial1.print(yg2);
+    Serial1.print(" g, Z: ");
+    Serial1.print(zg);
+    Serial1.print(" g, ");
+    Serial1.print(zg2);
+    Serial1.print(" g");
+    Serial1.print(", Pressure: ");
+    Serial1.print(pressure / 4096.0);
+    Serial1.print(" hPa, Temperature: ");
+    Serial1.print(temperature / 100.0);
+    Serial1.print(" °C");
+    // Serial1.print(", Igniter 0: ");
+    // Serial1.print(analogRead(sense0));
+    // Serial1.print(", Igniter 1: ");
+    // Serial1.print(analogRead(sense1));
+    // Serial1.print(", Voltage: ");
+    // Serial1.print(analogRead(voltage_sense));
+    Serial1.println();
+  }
 
   // Write data to SD card
+  dataFile.print(millis());
+  dataFile.print(",");
   dataFile.print(xg);
   dataFile.print(",");
   dataFile.print(yg);
@@ -205,8 +226,15 @@ void loop() { //375 works, 345 does not
     dataFile.flush();
     millisSinceLastLog = millis();
   }
+
+  if(millis() - millisSinceLastBeep > 10200){
+    digitalWrite(buzzer, LOW);
+    millisSinceLastBeep = millis();
+  }else if (millis() - millisSinceLastBeep > 10000){
+    digitalWrite(buzzer, HIGH);
+  }
   // save SD Card data every 5 seconds
   //digitalWrite(buzzer, LOW);
-  delay(200);
+  delay(20);
   //digitalWrite(buzzer, HIGH);
 }
