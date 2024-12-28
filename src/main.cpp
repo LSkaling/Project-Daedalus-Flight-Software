@@ -4,11 +4,12 @@
 #include <Lps22.h>
 #include <SPI.h>
 #include <SD.h>
+#include <ACAN2517FD.h>
+#include <Moteus.h>
 
 #define SD_CS_PIN PA4  // Chip Select pin for SD card
-#define TEENSY_I2C_ADDRESS 8
 
-const bool debug = true; //Changes if Serial is used
+const bool debug = true; //Changes if Serial1 is used
 
 long last_command = 0;
 
@@ -27,8 +28,6 @@ const int rbg_red = PB5;
 const int rbg_green = PB4;
 const int rbg_blue = PB3;
 
-const int mcp_int = PA8;
-const int mcp_cs = PA11;
 const int esp32_cs = PA12;
 
 const int igniter_0 = PB10;
@@ -39,6 +38,26 @@ const int sense1 = PB1;
 
 int millisSinceLastLog = 0;
 int millisSinceLastBeep = 0;
+
+static uint32_t gNextSendMillis = 0;
+
+static const byte MCP2517_SCK =  PA5; // SCK input of MCP2517
+static const byte MCP2517_SDI =  PA7; // SDI input of MCP2517
+static const byte MCP2517_SDO =   PA6; // SDO output of MCP2517
+
+static const byte MCP2517_CS  =  PA11; // CS input of MCP2517
+static const byte MCP2517_INT =  PA8; // INT output of MCP2517
+
+ACAN2517FD can (MCP2517_CS, SPI, MCP2517_INT) ;
+
+Moteus moteus1(can, []() {
+  Moteus::Options options;
+  options.id = 1;
+  return options;
+}());
+
+Moteus::PositionMode::Command position_cmd;
+Moteus::PositionMode::Format position_fmt;
 
 int getNextLogFileNumber() {
   int logNumber = 0;
@@ -78,67 +97,6 @@ struct MotorState {
     float voltage;      // 4 bytes
 };
 
-// Function to send position mode command
-void setPositionMode(float position, float velocity_limit, float accel_limit) {
-    uint8_t buffer[13]; // Command ID + 3 floats (4 bytes each)
-
-    buffer[0] = 0x02; // Command ID for Set Position Mode
-    memcpy(&buffer[1], &position, sizeof(float));
-    memcpy(&buffer[5], &velocity_limit, sizeof(float));
-    memcpy(&buffer[9], &accel_limit, sizeof(float));
-
-    Wire.beginTransmission(TEENSY_I2C_ADDRESS);
-    Wire.write(buffer, sizeof(buffer));
-    Wire.endTransmission();
-}
-
-// Function to send velocity mode command
-void setVelocityMode(float velocity, float accel_limit, float velocity_limit) {
-    uint8_t buffer[13]; // Command ID + 3 floats (4 bytes each)
-
-    buffer[0] = 0x03; // Command ID for Set Velocity Mode
-    memcpy(&buffer[1], &velocity, sizeof(float));
-    memcpy(&buffer[5], &accel_limit, sizeof(float));
-    memcpy(&buffer[9], &velocity_limit, sizeof(float));
-
-    Wire.beginTransmission(TEENSY_I2C_ADDRESS);
-    Wire.write(buffer, sizeof(buffer));
-    Wire.endTransmission();
-}
-
-// Function to read motor state from Teensy
-MotorState getMotorState() {
-    MotorState state;
-
-    // Request 21 bytes from the Teensy
-    Wire.requestFrom(TEENSY_I2C_ADDRESS, 21);
-
-    if (Wire.available() >= 21) {
-        Wire.readBytes((char*)&state.position, sizeof(float));
-        Wire.readBytes((char*)&state.velocity, sizeof(float));
-        state.fault = Wire.read();
-        Wire.readBytes((char*)&state.torque, sizeof(float));
-        Wire.readBytes((char*)&state.q_current, sizeof(float));
-        Wire.readBytes((char*)&state.voltage, sizeof(float));
-    }
-
-    return state;
-}
-
-
-uint8_t readRegister(uint8_t reg)
-{
-    Wire.beginTransmission(TEENSY_I2C_ADDRESS);
-    Wire.write(reg);
-    Wire.endTransmission(false);
-    Wire.requestFrom(TEENSY_I2C_ADDRESS, (uint8_t)1);
-    uint8_t value = 0;
-    if (Wire.available())
-    {
-        value = Wire.read();
-    }
-    return value;
-}  
 
 void setup() {
   // Initialize Serial1 communication
@@ -162,39 +120,70 @@ void setup() {
   digitalWrite(rbg_red, HIGH);
   digitalWrite(rbg_green, HIGH);
 
-  Wire.setSDA(PB9);
-  Wire.setSCL(PB8);
-  Wire.begin();  
-
   // Wait for Serial1 port to connect (only needed on some boards)
   while (!Serial1 && debug);
   delay(4000);
   // for(int i = 0; i < 20; i++){
   //   Serial1.println(i);
   //   delay(500);
+  // }  
+
+  Wire.setSDA(PB9);
+  Wire.setSCL(PB8);
+  Wire.begin();  
+
+  SPI.setMOSI(PA7);
+  SPI.setMISO(PA6);
+  SPI.setSCLK(PA5); 
+  SPI.begin();  
+
+  ACAN2517FDSettings settings(
+      ACAN2517FDSettings::OSC_40MHz, 1000ll * 1000ll, DataBitRateFactor::x1);  
+
+  // The atmega32u4 on the CANbed has only a tiny amount of memory.
+  // The ACAN2517FD driver needs custom settings so as to not exhaust
+  // all of SRAM just with its buffers.
+  settings.mArbitrationSJW = 2;
+  settings.mDriverTransmitFIFOSize = 1;
+  settings.mDriverReceiveFIFOSize = 2;
+
+  const uint32_t errorCode = can.begin(settings, [] { can.isr(); });
+
+  while (errorCode != 0) {
+    Serial1.print(F("CAN error 0x"));
+    Serial1.println(errorCode, HEX);
+    delay(1000);
+  }      
+
+  // To clear any faults the controllers may have, we start by sending
+  // a stop command to each.
+  moteus1.SetStop();
+  Serial1.println(F("all stopped"));
+
+  position_fmt.velocity_limit = Moteus::kFloat;
+  position_fmt.accel_limit = Moteus::kFloat;
+
+  // Serial1.println("Initializing SD card...");
+
+  // if (!SD.begin(SD_CS_PIN)) {
+  //   Serial1.println("Initialization failed!");
+  //   while (1);
   // }
+  // Serial1.println("Initialization done.");
 
-  Serial1.println("Initializing SD card...");
-
-  if (!SD.begin(SD_CS_PIN)) {
-    Serial1.println("Initialization failed!");
-    while (1);
-  }
-  Serial1.println("Initialization done.");
-
-  // Find the next available log file number
-  int logNumber = getNextLogFileNumber();
-  String logFileName = "log" + String(logNumber) + ".txt";
+  // // Find the next available log file number
+  // int logNumber = getNextLogFileNumber();
+  // String logFileName = "log" + String(logNumber) + ".txt";
   
-  Serial1.print("Creating log file: ");
-  Serial1.println(logFileName);
+  // Serial1.print("Creating log file: ");
+  // Serial1.println(logFileName);
 
-  // Create the log file
-  dataFile = SD.open(logFileName, FILE_WRITE);
-  if (!dataFile) {
-    Serial1.println("Error opening log file.");
-    while (1);
-  }
+  // // Create the log file
+  // dataFile = SD.open(logFileName, FILE_WRITE);
+  // if (!dataFile) {
+  //   Serial1.println("Error opening log file.");
+  //   while (1);
+  // }
 
   Serial1.println("ADXL345 Sensor Test");
 
@@ -225,90 +214,180 @@ void setup() {
 
 }
 
-void loop() { //375 works, 345 does not
-  int16_t x, y, z;
-  adxl345.readAccelerometer(&x, &y, &z);
+uint16_t gLoopCount = 0;
 
-  int16_t x2, y2, z2;
-  adxl375.readAccelerometer(&x2, &y2, &z2);
+void loop() {
 
-  int32_t pressure;
-  lps22.readPressure(&pressure);
+  // // We intend to send control frames every 20ms.
+  // const auto time = millis();
+  // if (gNextSendMillis >= time)
+  // {
+  //   return;
+  // }
 
-  int16_t temperature;
-  lps22.readTemperature(&temperature);
+  // gNextSendMillis += 20;
+  // gLoopCount++;
 
-  // ADXL345 scaling factor
-  float scale345 = 0.0039; // ±16g at 4 mg/LSB
 
-  // ADXL375 scaling factor
-  float scale375 = 0.049;  // ±200g at ~49 mg/LSB  
+  // int16_t x, y, z;
+  // adxl345.readAccelerometer(&x, &y, &z);
 
-  // Convert raw values to 'g' units (assuming 4 mg/LSB at +/-16g)
-  float xg = x * scale345;
-  float yg = y * scale345;
-  float zg = z * scale345;
+  // int16_t x2, y2, z2;
+  // adxl375.readAccelerometer(&x2, &y2, &z2);
 
-  float xg2 = x2 * scale375;
-  float yg2 = y2 * scale375;
-  float zg2 = z2 * scale375;
+  // int32_t pressure;
+  // lps22.readPressure(&pressure);
 
-  if(debug){
+  // int16_t temperature;
+  // lps22.readTemperature(&temperature);
 
-    Serial1.print("X: ");
-    Serial1.print(xg);
-    Serial1.print(" g, ");
-    Serial1.print(xg2);
-    Serial1.print(" g, Y: ");
-    Serial1.print(yg);
-    Serial1.print(" g, ");
-    Serial1.print(yg2);
-    Serial1.print(" g, Z: ");
-    Serial1.print(zg);
-    Serial1.print(" g, ");
-    Serial1.print(zg2);
-    Serial1.print(" g");
-    Serial1.print(", Pressure: ");
-    Serial1.print(pressure / 4096.0);
-    Serial1.print(" hPa, Temperature: ");
-    Serial1.print(temperature / 100.0);
-    Serial1.println(" °C");
+  // // ADXL345 scaling factor
+  // float scale345 = 0.0039; // ±16g at 4 mg/LSB
+
+  // // ADXL375 scaling factor
+  // float scale375 = 0.049;  // ±200g at ~49 mg/LSB  
+
+  // // Convert raw values to 'g' units (assuming 4 mg/LSB at +/-16g)
+  // float xg = x * scale345;
+  // float yg = y * scale345;
+  // float zg = z * scale345;
+
+  // float xg2 = x2 * scale375;
+  // float yg2 = y2 * scale375;
+  // float zg2 = z2 * scale375;
+
+  // Moteus::PositionMode::Command cmd;
+  // cmd.position = ((millis() / 1000) % 2) * 25;
+  // cmd.velocity = 2;
+  // cmd.accel_limit = 200;
+  // cmd.velocity_limit = 200;
+  // moteus1.SetPosition(cmd, &position_fmt);
+
+  // if(debug){
+
+  //   auto print_moteus = [](const Moteus::Query::Result &query)
+  //   {
+  //     Serial1.print(static_cast<int>(query.mode));
+  //     Serial1.print(F(" "));
+  //     Serial1.print(query.position);
+  //     Serial1.print(F("  velocity "));
+  //     Serial1.print(query.velocity);
+  //   };
+
+  //   print_moteus(moteus1.last_result().values);
+
+  //   Serial1.print("X: ");
+  //   Serial1.print(xg);
+  //   Serial1.print(" g, ");
+  //   Serial1.print(xg2);
+  //   Serial1.print(" g, Y: ");
+  //   Serial1.print(yg);
+  //   Serial1.print(" g, ");
+  //   Serial1.print(yg2);
+  //   Serial1.print(" g, Z: ");
+  //   Serial1.print(zg);
+  //   Serial1.print(" g, ");
+  //   Serial1.print(zg2);
+  //   Serial1.print(" g");
+  //   Serial1.print(", Pressure: ");
+  //   Serial1.print(pressure / 4096.0);
+  //   Serial1.print(" hPa, Temperature: ");
+  //   Serial1.print(temperature / 100.0);
+  //   Serial1.println(" °C");
+  // }
+
+  // // Write data to SD card
+  // dataFile.print(millis());
+  // dataFile.print(",");
+  // dataFile.print(xg);
+  // dataFile.print(",");
+  // dataFile.print(yg);
+  // dataFile.print(",");
+  // dataFile.print(zg);
+  // dataFile.print(",");
+  // dataFile.print(xg2);
+  // dataFile.print(",");
+  // dataFile.print(yg2);
+  // dataFile.print(",");
+  // dataFile.print(zg2);
+  // dataFile.print(",");
+  // dataFile.print(pressure / 4096.0);
+  // dataFile.print(",");
+  // dataFile.print(temperature / 100.0);
+  // dataFile.println();
+
+  // if(millis() - millisSinceLastLog > 2000){
+  //   dataFile.flush();
+  //   millisSinceLastLog = millis();
+  // }
+
+  // if(millis() - millisSinceLastBeep > 10200){
+  //   digitalWrite(buzzer, LOW);
+  //   millisSinceLastBeep = millis();
+  // }else if (millis() - millisSinceLastBeep > 10000){
+  //   digitalWrite(buzzer, HIGH);
+  // }
+  // // save SD Card data every 5 seconds
+  // //digitalWrite(buzzer, LOW);
+  // delay(20);
+  // //digitalWrite(buzzer, HIGH);
+
+  // We intend to send control frames every 20ms.
+  const auto time = millis();
+  if (gNextSendMillis >= time)
+  {
+    return;
   }
 
-  // Write data to SD card
-  dataFile.print(millis());
-  dataFile.print(",");
-  dataFile.print(xg);
-  dataFile.print(",");
-  dataFile.print(yg);
-  dataFile.print(",");
-  dataFile.print(zg);
-  dataFile.print(",");
-  dataFile.print(xg2);
-  dataFile.print(",");
-  dataFile.print(yg2);
-  dataFile.print(",");
-  dataFile.print(zg2);
-  dataFile.print(",");
-  dataFile.print(pressure / 4096.0);
-  dataFile.print(",");
-  dataFile.print(temperature / 100.0);
-  dataFile.println();
+  gNextSendMillis += 20;
+  gLoopCount++;
 
-  if(millis() - millisSinceLastLog > 2000){
-    dataFile.flush();
-    millisSinceLastLog = millis();
+  Moteus::PositionMode::Command cmd;
+  cmd.position = ((millis() / 1000) % 2) * 25;
+  cmd.velocity = 2;
+  cmd.accel_limit = 200;
+  cmd.velocity_limit = 200;
+  moteus1.SetPosition(cmd, &position_fmt);
+
+  // Moteus::CurrentMode::Command cmd;
+  // cmd.d_A = 0.5;
+  // cmd.q_A = 0.5;
+  // moteus1.SetCurrent(cmd);
+
+  // Moteus::PositionMode::Command cmd;
+  // cmd.position = NaN;
+  // cmd.velocity = 5;
+  // cmd.accel_limit = 200;
+  // cmd.velocity_limit = 200;
+  // moteus1.SetPosition(cmd, &position_fmt);
+
+  if (gLoopCount % 25 != 0)
+  {
+    return;
   }
 
-  if(millis() - millisSinceLastBeep > 10200){
-    digitalWrite(buzzer, LOW);
-    millisSinceLastBeep = millis();
-  }else if (millis() - millisSinceLastBeep > 10000){
-    digitalWrite(buzzer, HIGH);
-  }
-  // save SD Card data every 5 seconds
-  //digitalWrite(buzzer, LOW);
-  delay(20);
-  //digitalWrite(buzzer, HIGH);
+  // Only print our status every 5th cycle, so every 1s.
 
+  Serial1.print(F("time "));
+  Serial1.print(gNextSendMillis);
+
+  auto print_moteus = [](const Moteus::Query::Result &query)
+  {
+    Serial1.print(static_cast<int>(query.mode));
+    Serial1.print(F(" "));
+    Serial1.print(query.position);
+    Serial1.print(F("  velocity "));
+    Serial1.print(query.velocity);
+    Serial1.print(F("  fault "));
+    Serial1.print(query.fault);
+    Serial1.print(F("  torque "));
+    Serial1.print(query.torque);
+    Serial1.print(F("  q current "));
+    Serial1.print(query.q_current);
+    Serial1.print(F("  voltage "));
+    Serial1.print(query.voltage);
+  };
+
+  print_moteus(moteus1.last_result().values);
+  Serial1.println();
 }
