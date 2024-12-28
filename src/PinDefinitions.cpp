@@ -2,9 +2,9 @@
 #include <Arduino.h>
 
 PinDefinitions::PinDefinitions():
-    STATUS_LED_RED(1),
-    STATUS_LED_GREEN(0),
-    STATUS_LED_BLUE(2),
+    STATUS_LED_RED(PB5),
+    STATUS_LED_GREEN(PB4),
+    STATUS_LED_BLUE(PB3),
 
     IGNITER_0(PB10),
     IGNITER_1(PB11),
