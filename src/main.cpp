@@ -4,33 +4,13 @@
 #include <Lps22.h>
 #include <SPI.h>
 #include <SD.h>
-#include "C610Bus.h"
-#include "C610Bus.tpp" 
-
 
 #define SD_CS_PIN PA4  // Chip Select pin for SD card
 #define TEENSY_I2C_ADDRESS 8
 
-const bool debug = false; //Changes if Serial is used
-
-// PID parameters
-float kp = 200.0;  // Proportional gain
-float ki = 0.0;   // Integral gain
-float kd = 20000.0;   // Derivative gain
-
-const int motor_max = 0;
-const int motor_min = -60;
-
-float target_position = 1.0;  // Initial target position in radians
-float previous_error = 0;
-float integral = 0;
-long last_time = 0;
+const bool debug = true; //Changes if Serial is used
 
 long last_command = 0;
-
-C610Bus bus;
-
-
 
 File dataFile;
 
@@ -38,18 +18,24 @@ Adxl adxl345 = Adxl(0x1D, ADXL345);
 Adxl adxl375 = Adxl(0x53, ADXL375);
 Lps22 lps22 = Lps22(0x5C);
 
+const int servo = PA1;
+
+const int voltage_sense = PA2;
+
 const int buzzer = PA3;
 const int rbg_red = PB5;
 const int rbg_green = PB4;
 const int rbg_blue = PB3;
+
+const int mcp_int = PA8;
+const int mcp_cs = PA11;
+const int esp32_cs = PA12;
 
 const int igniter_0 = PB10;
 const int igniter_1 = PB11;
 
 const int sense0 = PB0;
 const int sense1 = PB1;
-
-const int voltage_sense = PA2;
 
 int millisSinceLastLog = 0;
 int millisSinceLastBeep = 0;
@@ -139,13 +125,25 @@ MotorState getMotorState() {
     return state;
 }
 
+
+uint8_t readRegister(uint8_t reg)
+{
+    Wire.beginTransmission(TEENSY_I2C_ADDRESS);
+    Wire.write(reg);
+    Wire.endTransmission(false);
+    Wire.requestFrom(TEENSY_I2C_ADDRESS, (uint8_t)1);
+    uint8_t value = 0;
+    if (Wire.available())
+    {
+        value = Wire.read();
+    }
+    return value;
+}  
+
 void setup() {
   // Initialize Serial1 communication
   Serial1.begin(9600);
   // Initialize I2C communication on PB8 (SCL) and PB9 (SDA)
-
-  CAN.begin(1000000);  // Initialize CAN bus with a 1 Mbps bitrate
-
 
   pinMode(buzzer, OUTPUT);
   pinMode(rbg_red, OUTPUT);
@@ -274,8 +272,7 @@ void loop() { //375 works, 345 does not
     Serial1.print(pressure / 4096.0);
     Serial1.print(" hPa, Temperature: ");
     Serial1.print(temperature / 100.0);
-    Serial1.print(" °C");
-    Serial1.println();
+    Serial1.println(" °C");
   }
 
   // Write data to SD card
@@ -314,73 +311,4 @@ void loop() { //375 works, 345 does not
   delay(20);
   //digitalWrite(buzzer, HIGH);
 
-  bus.PollCAN(); // Check for messages from the motors.
-
-  // Check for serial input to update target position
-  if (Serial.available() > 0)
-  {
-      String input = Serial.readStringUntil('\n');  // Read the input from Serial
-      target_position = input.toFloat();            // Convert input to float (radians)
-
-      // Convert target position to range
-      if (target_position > motor_max)
-      {
-          target_position = motor_max;
-      }
-      else if (target_position < motor_min)
-      {
-          target_position = motor_min;
-      }
-
-      Serial.print("New target position: ");
-      Serial.println(target_position);
-  }
-
-  long now = millis();
-  if (now - last_command >= 10) // Loop at 100Hz. Adjust control every 10ms
-  {
-      // Get the current position of motor 0
-      float current_position = bus.Get(0).Position(); // Get the shaft position of motor 0 in radians.
-      
-      // Calculate the error
-      float error = target_position - current_position;
-
-      // Calculate the time difference
-      long dt = now - last_time;
-      last_time = now;
-
-      // PID calculations
-      integral += error * dt; // Integral term
-      float derivative = (error - previous_error) / dt; // Derivative term
-
-      // Compute the output torque based on PID control
-      float output_torque = (kp * error) + (ki * integral) + (kd * derivative);
-
-      // Limit the output torque to less than 10000
-      if (output_torque > 10000)
-      {
-          output_torque = 10000;
-      }
-      else if (output_torque < -10000)
-      {
-          output_torque = -10000;
-      }
-
-
-      // Command torque to motor 0 (ensure the torque is within safe limits)
-      bus.CommandTorques(output_torque, 0, 0, 0, C610Subbus::kOneToFourBlinks); 
-
-      // Update the previous error
-      previous_error = error;
-
-      // Print debugging info (position, error, output torque)
-      Serial.print("Position: ");
-      Serial.print(current_position);
-      Serial.print(" Error: ");
-      Serial.print(error);
-      Serial.print(" Output Torque: ");
-      Serial.println(output_torque);
-
-      last_command = now;
-  }  
 }
