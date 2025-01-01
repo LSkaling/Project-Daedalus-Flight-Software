@@ -10,6 +10,7 @@
 #include <PinDefinitions.h>
 #include <StatusIndicator.h>
 #include <Logging.h>
+#include <STM32FreeRTOS.h>
 
 long last_command = 0;
 
@@ -18,7 +19,21 @@ int millisSinceLastBeep = 0;
 
 static uint32_t gNextSendMillis = 0;
 
-String logVariables[] = {
+// ADXL345 scaling factor
+const float scale345 = 0.0039; // ±16g at 4 mg/LSB
+
+// ADXL375 scaling factor
+const float scale375 = 0.049; // ±200g at ~49 mg/LSB
+
+float x, y, z, x_hg, y_hg, z_hg;
+
+int mode;
+float position, velocity;
+
+int32_t pressure;
+int16_t temperature;
+
+const char* logVariables[] = {
     "Time",
     "Xg",
     "Xg2",
@@ -33,7 +48,7 @@ String logVariables[] = {
     "Velocity"
 };
 
-String printVariables[] = {
+const char* printVariables[] = {
     "Time",
     "Xg",
     "Xg2",
@@ -67,8 +82,117 @@ Moteus moteus1(can, []() {
 Moteus::PositionMode::Command position_cmd;
 Moteus::PositionMode::Format position_fmt;
 
+TaskHandle_t FastLoopHandle;
+TaskHandle_t LogLoopHandle;
+TaskHandle_t PrintLoopHandle;
+TaskHandle_t FlushLoopHandle;
+
+// Fast Loop (Read sensors, Write motor)
+void FastLoop(void *pvParameters)
+{
+  while (true)
+  {
+    int16_t x_raw, y_raw, z_raw;
+    adxl345.readAccelerometer(&x_raw, &y_raw, &z_raw);
+
+    int16_t x_raw_hg, y_raw_hg, z_raw_hg;
+    adxl375.readAccelerometer(&x_raw_hg, &y_raw_hg, &z_raw_hg);
+
+    lps22.readPressure(&pressure);
+    pressure /= 4096;
+
+    lps22.readTemperature(&temperature);
+    temperature /= 100;
+
+    // Convert raw values to 'g' units (assuming 4 mg/LSB at +/-16g)
+    x = x_raw * scale345;
+    y = y_raw * scale345;
+    z = z_raw * scale345;
+
+    x_hg = x_raw_hg * scale375;
+    y_hg = y_raw_hg * scale375;
+    z_hg = z_raw_hg * scale375;
+
+    vTaskDelay(1); // Run as fast as possible (1 ms delay to prevent watchdog reset)
+  }
+}
+
+// 50 Hz Logging Task
+void LogLoop(void *pvParameters)
+{
+  while (true)
+  {
+    Moteus::PositionMode::Command cmd;
+    cmd.position = NaN;
+    cmd.velocity = 5;
+
+    moteus1.SetPosition(cmd);
+
+    const auto moteus1_result = moteus1.last_result();
+    mode = static_cast<int>(moteus1_result.values.mode);
+    position = moteus1_result.values.position;
+    velocity = moteus1_result.values.velocity;
+    vTaskDelay(50); // 50 ms = 20 Hz
+  }
+}
+
+// 5 Hz Print and State Update Task
+void PrintLoop(void *pvParameters)
+{
+  while (true)
+  {
+
+    // float values[] = {
+    //     millis(),
+    //     x,
+    //     x_hg,
+    //     y,
+    //     y_hg,
+    //     z,
+    //     z_hg,
+    //     pressure,
+    //     temperature,
+    //     mode,
+    //     position,
+    //     velocity
+    // };
+
+    //logging.log(printVariables, values, logSize);
+    Serial1.print("Time: " + String(millis()));
+    Serial1.print(" Xg: " + String(x));
+    Serial1.print(" Xg2: " + String(x_hg));
+    Serial1.print(" Yg: " + String(y));
+    Serial1.print(" Yg2: " + String(y_hg));
+    Serial1.print(" Zg: " + String(z));
+    Serial1.print(" Zg2: " + String(z_hg));
+    Serial1.print(" Pressure: " + String(pressure));
+    Serial1.print(" Temperature: " + String(temperature));
+    Serial1.print(" Mode: " + String(mode));
+    Serial1.print(" Position: " + String(position));
+    Serial1.print(" Velocity: " + String(velocity)); 
+    Serial1.println();
+    vTaskDelay(200); // 200 ms = 5 Hz
+  }
+}
+
+// 0.5 Hz SD Card Flush Task
+void FlushLoop(void *pvParameters)
+{
+  while (true)
+  {
+    logging.flush();
+    vTaskDelay(2000); // 2000 ms = 0.5 Hz
+  }
+}
 
 void setup() {
+  Serial1.begin(115200);
+  while (!Serial1){
+    statusIndicator.solid(StatusIndicator::RED);
+  }
+  delay(4000);
+  Serial1.println("Starting up...");
+
   statusIndicator.off();
 
   Wire.setSDA(PinDefs.SDA);
@@ -81,6 +205,7 @@ void setup() {
   SPI.begin();  
 
   while (logging.begin(logVariables, logSize) == false) {
+    statusIndicator.solid(StatusIndicator::RED);
     delay(1000);
   }
 
@@ -97,7 +222,9 @@ void setup() {
   const uint32_t errorCode = can.begin(settings, [] { can.isr(); });
 
   while (errorCode != 0) {
-    logging.log("CAN initialization failed with error code: " + String(errorCode));
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "CAN initialization failed with error code: %ld", errorCode);
+    logging.log(buffer);
     delay(1000);
   }      
 
@@ -125,91 +252,23 @@ void setup() {
 
   logging.flush();
 
-  //statusIndicator.solid(StatusIndicator::Color::GREEN);
+  // Create tasks
+  xTaskCreate(FastLoop, "FastLoop", 256, NULL, 3, &FastLoopHandle); // Highest priority
+  xTaskCreate(LogLoop, "LogLoop", 256, NULL, 2, &LogLoopHandle);
+  xTaskCreate(PrintLoop, "PrintLoop", 256, NULL, 1, &PrintLoopHandle);
+  xTaskCreate(FlushLoop, "FlushLoop", 256, NULL, 1, &FlushLoopHandle);
 
+  statusIndicator.solid(StatusIndicator::GREEN);
 
+  Serial1.println("Setup complete");
+
+  // Start FreeRTOS scheduler
+  vTaskStartScheduler();
 }
 
 uint16_t gLoopCount = 0;
 
 void loop() {
-  // We intend to send control frames every 20ms.
-  const auto time = millis();
-  if (gNextSendMillis >= time)
-  {
-    return;
-  }
-
-  gNextSendMillis += 20;
-  gLoopCount++;
-
-
-  int16_t x, y, z;
-  adxl345.readAccelerometer(&x, &y, &z);
-
-  int16_t x2, y2, z2;
-  adxl375.readAccelerometer(&x2, &y2, &z2);
-
-  int32_t pressure;
-  lps22.readPressure(&pressure);
-  pressure /= 4096;
-
-  int16_t temperature;
-  lps22.readTemperature(&temperature);
-  temperature /= 100;
-
-  // ADXL345 scaling factor
-  float scale345 = 0.0039; // ±16g at 4 mg/LSB
-
-  // ADXL375 scaling factor
-  float scale375 = 0.049;  // ±200g at ~49 mg/LSB  
-
-  // Convert raw values to 'g' units (assuming 4 mg/LSB at +/-16g)
-  float xg = x * scale345;
-  float yg = y * scale345;
-  float zg = z * scale345;
-
-  float xg2 = x2 * scale375;
-  float yg2 = y2 * scale375;
-  float zg2 = z2 * scale375;
-
-  Moteus::PositionMode::Command cmd;
-  cmd.position = NaN;
-  cmd.velocity = 5;
-
-  moteus1.SetPosition(cmd);
-
-  if (gLoopCount % 5 != 0)
-  {
-    return;
-  }
-
-  const auto moteus1_result = moteus1.last_result();
-  int mode = static_cast<int>(moteus1_result.values.mode);
-  float position = moteus1_result.values.position;
-  float velocity = moteus1_result.values.velocity;
-
-  String log_values[] = {
-      String(time),
-      String(xg, 2),
-      String(xg2, 2),
-      String(yg, 2),
-      String(yg2, 2),
-      String(zg, 2),
-      String(zg2, 2),
-      String(pressure),
-      String(temperature),
-      String(mode),        // Convert int to String
-      String(position, 2), // Convert float to String (2 decimal places)
-      String(velocity, 2)  // Convert float to String (2 decimal places)
-  };
-
-  logging.log(log_values, printVariables, logSize);
-
-  if(millis() - millisSinceLastLog > 2000){
-    logging.flush();
-    millisSinceLastLog = millis();
-  }
 
   
 }

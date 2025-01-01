@@ -41,11 +41,10 @@ int Logging::getNextLogFileNumber()
     return logNumber + 1;
 }
 
-bool Logging::begin(String names[], size_t size)
+bool Logging::begin(const char* names[], size_t size)
 {
     if (debug)
     {
-        Serial1.begin(115200);
         int start_wait = millis();
         while (!Serial1)
         {
@@ -73,7 +72,7 @@ bool Logging::begin(String names[], size_t size)
     return true;
 }
 
-void Logging::log(String message)
+void Logging::log(const char* message)
 {
     if (debug)
     {
@@ -85,30 +84,27 @@ void Logging::log(String message)
     }
 }
 
-void Logging::log(String values[], String names[], size_t size)
+void Logging::log(const char* names[], const float values[], size_t size)
 {
-    if (sizeof(names) != sizeof(values))
+    char buffer[256]; // Pre-allocated buffer for printing
+    for (size_t i = 0; i < size; i++)
     {
-        return;
+        snprintf(buffer, sizeof(buffer), "%s: %.2f,", names[i], values[i]);
+        if (debug)
+        {
+            Serial1.print(buffer);
+        }
+        if (logToSD && dataFile)
+        {
+            dataFile.print(buffer);
+        }
     }
     if (debug)
     {
-        for (int i = 0; i < size; i++)
-        {
-            Serial1.print(names[i]);
-            Serial1.print(": ");
-            Serial1.print(values[i]);
-            Serial1.print(",");
-        }
         Serial1.println();
     }
-    if (logToSD)
+    if (logToSD && dataFile)
     {
-        for (int i = 0; i < sizeof(values) / sizeof(values[0]); i++)
-        {
-            dataFile.print(values[i]);
-            dataFile.print(",");
-        }
         dataFile.println();
     }
 }

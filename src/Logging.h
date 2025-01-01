@@ -8,10 +8,10 @@ class Logging {
 public:
     Logging(bool debug, bool logToSD, int SD_CS);
 
-    void log(String message);
-    void log(String values[], String names[], size_t size);
+    void log(const char* message);
+    void log(const char* names[], const float values[], size_t size);
 
-    bool begin(String names[], size_t size);
+    bool begin(const char *names[], size_t size);
 
     void flush();
 
