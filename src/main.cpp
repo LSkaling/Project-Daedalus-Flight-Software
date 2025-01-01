@@ -6,6 +6,7 @@
 #include <SD.h>
 #include <ACAN2517FD.h>
 #include <Moteus.h>
+#include <MotorRoutines.h>
 #include <Buzzer.h>
 #include <PinDefinitions.h>
 #include <StatusIndicator.h>
@@ -253,6 +254,10 @@ void setup() {
   }
 
   logging.flush();
+
+  MotorRoutines::runToEnd(moteus1, 5, 0.5);
+
+  Serial1.println("Motor routine complete");
 
   // Create tasks
   xTaskCreate(FastLoop, "FastLoop", 256, NULL, 3, &FastLoopHandle); // Highest priority
