@@ -12,6 +12,7 @@
 #include <StatusIndicator.h>
 #include <Logging.h>
 #include <STM32FreeRTOS.h>
+#include <States.cpp>
 
 long last_command = 0;
 
@@ -73,6 +74,7 @@ Adxl adxl345 = Adxl(0x1D, ADXL345);
 Adxl adxl375 = Adxl(0x53, ADXL375);
 Lps22 lps22 = Lps22(0x5C);
 StatusIndicator statusIndicator = StatusIndicator(PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
+States state = States::IDLE;
 
 Moteus moteus1(can, []() {
   Moteus::Options options;
@@ -123,17 +125,44 @@ void LogLoop(void *pvParameters)
 {
   while (true)
   {
-    Moteus::PositionMode::Command cmd;
-    cmd.position = NaN;
-    cmd.velocity = 5;
+    switch (state)
+    {
+    case States::IDLE:
+      /* code */
+      break;
+    
+    case States::ARMED:
+      /* code */
+      break;
 
-    moteus1.SetPosition(cmd);
+    case States::IGNITION:
+      /* code */
+      break;
 
-    const auto moteus1_result = moteus1.last_result();
-    mode = static_cast<int>(moteus1_result.values.mode);
-    position = moteus1_result.values.position;
-    velocity = moteus1_result.values.velocity;
-    current = moteus1_result.values.q_current;
+    case States::COAST:
+      /* code */
+      break;
+
+    case States::APOGEE:
+      /* code */
+      break;
+
+    case States::BELLYFLOP:
+      /* code */
+      break;
+
+    case States::CHUTE:
+      /* code */
+      break;
+
+    case States::IMPACT:
+      /* code */
+      break;
+
+    case States::LANDED:
+      /* code */
+      break;
+    }
     vTaskDelay(50); // 50 ms = 20 Hz
   }
 }
