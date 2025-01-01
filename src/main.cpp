@@ -28,7 +28,7 @@ const float scale375 = 0.049; // ±200g at ~49 mg/LSB
 float x, y, z, x_hg, y_hg, z_hg;
 
 int mode;
-float position, velocity;
+float position, velocity, current;
 
 int32_t pressure;
 int16_t temperature;
@@ -132,6 +132,7 @@ void LogLoop(void *pvParameters)
     mode = static_cast<int>(moteus1_result.values.mode);
     position = moteus1_result.values.position;
     velocity = moteus1_result.values.velocity;
+    current = moteus1_result.values.q_current;
     vTaskDelay(50); // 50 ms = 20 Hz
   }
 }
@@ -170,6 +171,7 @@ void PrintLoop(void *pvParameters)
     Serial1.print(" Mode: " + String(mode));
     Serial1.print(" Position: " + String(position));
     Serial1.print(" Velocity: " + String(velocity)); 
+    Serial1.print(" Current: " + String(current));
     Serial1.println();
     vTaskDelay(200); // 200 ms = 5 Hz
   }
