@@ -11,6 +11,8 @@ bool MotorRoutines::runToEnd(Moteus &motor, float velocity, float current)
     cmd.velocity = velocity;
     motor.SetPosition(cmd);
 
+    int start_time = millis();
+
     while (true)
     {
         const auto motor_result = motor.last_result();
@@ -27,7 +29,7 @@ bool MotorRoutines::runToEnd(Moteus &motor, float velocity, float current)
         Serial1.print(" Current: " + String(current));
         Serial1.println();
 
-        if (current > 0.5)
+        if (current > 0.5 && millis() - start_time > 200)
         {
             motor.SetStop();
             return true;

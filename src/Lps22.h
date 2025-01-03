@@ -7,8 +7,8 @@ class Lps22 {
   public:
     Lps22(uint8_t address);
     bool begin();
-    void readPressure(int32_t *pressure);
-    void readTemperature(int16_t *temperature);
+    void readPressure(float *pressure);
+    void readTemperature(float *temperature);
 
   private:
     void writeRegister(uint8_t reg, uint8_t value);

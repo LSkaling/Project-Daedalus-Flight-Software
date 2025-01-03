@@ -13,13 +13,11 @@
 #include <Logging.h>
 #include <STM32FreeRTOS.h>
 #include <States.cpp>
+#include <i2c_scanner.h>
 
-long last_command = 0;
+const bool SIMULATION_MODE = true;
 
-int millisSinceLastLog = 0;
-int millisSinceLastBeep = 0;
-
-static uint32_t gNextSendMillis = 0;
+//SemaphoreHandle_t xSerialMutex;
 
 // ADXL345 scaling factor
 const float scale345 = 0.0039; // ±16g at 4 mg/LSB
@@ -29,11 +27,11 @@ const float scale375 = 0.049; // ±200g at ~49 mg/LSB
 
 float x, y, z, x_hg, y_hg, z_hg;
 
-int mode;
+uint32_t mode;
 float position, velocity, current;
 
-int32_t pressure;
-int16_t temperature;
+float pressure;
+float temperature;
 
 const char* logVariables[] = {
     "Time",
@@ -50,24 +48,9 @@ const char* logVariables[] = {
     "Velocity"
 };
 
-const char* printVariables[] = {
-    "Time",
-    "Xg",
-    "Xg2",
-    "Yg",
-    "Yg2",
-    "Zg",
-    "Zg2",
-    "P",
-    "Temp",
-    "Mode",
-    "Pos",
-    "Vel"
-};
-
 size_t logSize = sizeof(logVariables) / sizeof(logVariables[0]);
 
-Logging logging(true, true, PinDefs.SD_CS);
+Logging logging(true, false, PinDefs.SD_CS);
 ACAN2517FD can (PinDefs.MCP_CS, SPI, PinDefs.MCP_INT);
 File dataFile;
 Adxl adxl345 = Adxl(0x1D, ADXL345);
@@ -82,45 +65,90 @@ Moteus moteus1(can, []() {
   return options;
 }());
 
-Moteus::PositionMode::Command position_cmd;
-Moteus::PositionMode::Format position_fmt;
-
 TaskHandle_t FastLoopHandle;
 TaskHandle_t LogLoopHandle;
 TaskHandle_t PrintLoopHandle;
 TaskHandle_t FlushLoopHandle;
+
+void splitString(String data, char delimiter, String parts[], int maxParts)
+{
+  int i = 0;
+  int pos = 0;
+  String token;
+
+  while ((pos = data.indexOf(delimiter)) != -1 && i < maxParts - 1)
+  {
+    token = data.substring(0, pos);
+    parts[i++] = token;
+    data = data.substring(pos + 1);
+  }
+  parts[i] = data; // Last part (or whole if no delimiter left)
+}
 
 // Fast Loop (Read sensors, Write motor)
 void FastLoop(void *pvParameters)
 {
   while (true)
   {
-    int16_t x_raw, y_raw, z_raw;
-    adxl345.readAccelerometer(&x_raw, &y_raw, &z_raw);
+    if (SIMULATION_MODE)
+    {
+      // Request data from serial
+      //Serial1.println("Requesting Data");
+      Serial1.println("REQ_DATA");
+      while (Serial1.available() == 0)
+      {
+        statusIndicator.solid(StatusIndicator::RED);
+      }
+      statusIndicator.solid(StatusIndicator::GREEN);
+      //Serial1.println("Data received");
+      String data = Serial1.readStringUntil('\n');
+      //Serial1.println("Read data");
+      String dataParts[12];
+      splitString(data, ',', dataParts, 12);
 
-    int16_t x_raw_hg, y_raw_hg, z_raw_hg;
-    adxl375.readAccelerometer(&x_raw_hg, &y_raw_hg, &z_raw_hg);
+      x = dataParts[0].toFloat();
+      x_hg = dataParts[1].toFloat();
+      y = dataParts[2].toFloat();
+      y_hg = dataParts[3].toFloat();
+      z = dataParts[4].toFloat();
+      z_hg = dataParts[5].toFloat();
+      pressure = dataParts[6].toFloat();
+      temperature = dataParts[7].toFloat();
+      mode = dataParts[8].toInt();
+      position = dataParts[9].toFloat();
+      velocity = dataParts[10].toFloat();
+      current = dataParts[11].toFloat();
 
-    lps22.readPressure(&pressure);
-    pressure /= 4096;
+    //   //xSemaphoreGive(xSerialMutex);
+    }
+    else
+    {
+      // Serial1.println("Test");
+      int16_t x_raw, y_raw, z_raw;
+      adxl345.readAccelerometer(&x_raw, &y_raw, &z_raw);
 
-    lps22.readTemperature(&temperature);
-    temperature /= 100;
+      int16_t x_raw_hg, y_raw_hg, z_raw_hg;
+      adxl375.readAccelerometer(&x_raw_hg, &y_raw_hg, &z_raw_hg);
 
-    // Convert raw values to 'g' units (assuming 4 mg/LSB at +/-16g)
-    x = x_raw * scale345;
-    y = y_raw * scale345;
-    z = z_raw * scale345;
+      lps22.readPressure(&pressure);
 
-    x_hg = x_raw_hg * scale375;
-    y_hg = y_raw_hg * scale375;
-    z_hg = z_raw_hg * scale375;
+      lps22.readTemperature(&temperature);
 
-    vTaskDelay(1); // Run as fast as possible (1 ms delay to prevent watchdog reset)
+      // Convert raw values to 'g' units (assuming 4 mg/LSB at +/-16g)
+      x = x_raw * scale345;
+      y = y_raw * scale345;
+      z = z_raw * scale345;
+
+      x_hg = x_raw_hg * scale375;
+      y_hg = y_raw_hg * scale375;
+      z_hg = z_raw_hg * scale375;
+   }
+
+    vTaskDelay(200); // Run at 50hz
   }
 }
 
-// 50 Hz Logging Task
+// 20 Hz Logging Task
 void LogLoop(void *pvParameters)
 {
   while (true)
@@ -172,38 +200,54 @@ void PrintLoop(void *pvParameters)
 {
   while (true)
   {
+    if(millis() % 2000 < 1000){
+      statusIndicator.solid(StatusIndicator::RED);
+    } else{
+      statusIndicator.solid(StatusIndicator::BLUE);
+    }
+    //if(xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE){
+      Serial1.print("Time: ");
+      Serial1.print(millis());
+      Serial1.print(" Xg: ");
+      Serial1.print(x);
+      Serial1.print(" Xg2: ");
+      Serial1.print(x_hg);
+      Serial1.print(" Yg: ");
+      Serial1.print(y);
+      Serial1.print(" Yg2: ");
+      Serial1.print(y_hg);
+      Serial1.print(" Zg: ");
+      Serial1.print(z);
+      Serial1.print(" Zg2: ");
+      Serial1.print(z_hg);
+      Serial1.print(" Pressure: ");
+      Serial1.print(pressure);
+      Serial1.print(" Temperature: ");
+      Serial1.print(temperature);
+      Serial1.print(" Mode: ");
+      Serial1.print(mode);
+      Serial1.print(" Position: ");
+      Serial1.print(position);
+      Serial1.print(" Velocity: ");
+      Serial1.print(velocity);
+      Serial1.print(" Current: ");
+      Serial1.print(current);
+      Serial1.print(" Heap: ");
+      Serial1.print(xPortGetFreeHeapSize());
+      Serial1.print(" Fast loop:");
+      Serial1.print(uxTaskGetStackHighWaterMark(FastLoopHandle));
+      Serial1.print(" Log loop:");
+      Serial1.print(uxTaskGetStackHighWaterMark(LogLoopHandle));
+      Serial1.print(" Print loop:");
+      Serial1.print(uxTaskGetStackHighWaterMark(PrintLoopHandle));
+      Serial1.print(" Flush loop:");
+      Serial1.print(uxTaskGetStackHighWaterMark(FlushLoopHandle));
+      Serial1.println();
 
-    // float values[] = {
-    //     millis(),
-    //     x,
-    //     x_hg,
-    //     y,
-    //     y_hg,
-    //     z,
-    //     z_hg,
-    //     pressure,
-    //     temperature,
-    //     mode,
-    //     position,
-    //     velocity
-    // };
 
-    //logging.log(printVariables, values, logSize);
-    Serial1.print("Time: " + String(millis()));
-    Serial1.print(" Xg: " + String(x));
-    Serial1.print(" Xg2: " + String(x_hg));
-    Serial1.print(" Yg: " + String(y));
-    Serial1.print(" Yg2: " + String(y_hg));
-    Serial1.print(" Zg: " + String(z));
-    Serial1.print(" Zg2: " + String(z_hg));
-    Serial1.print(" Pressure: " + String(pressure));
-    Serial1.print(" Temperature: " + String(temperature));
-    Serial1.print(" Mode: " + String(mode));
-    Serial1.print(" Position: " + String(position));
-    Serial1.print(" Velocity: " + String(velocity)); 
-    Serial1.print(" Current: " + String(current));
-    Serial1.println();
-    vTaskDelay(200); // 200 ms = 5 Hz
+      //xSemaphoreGive(xSerialMutex);
+    //}
+    vTaskDelay(500); // 200 ms = 5 Hz
   }
 }
 
@@ -218,18 +262,36 @@ void FlushLoop(void *pvParameters)
 }
 
 void setup() {
-  Serial1.begin(115200);
+  Serial1.begin(230400);
+
   while (!Serial1){
     statusIndicator.solid(StatusIndicator::RED);
   }
-  delay(4000);
-  Serial1.println("Starting up...");
-
-  statusIndicator.off();
 
   Wire.setSDA(PinDefs.SDA);
   Wire.setSCL(PinDefs.SCL);
-  Wire.begin();  
+  Wire.begin();
+
+  delay(4000);
+
+  //scanI2CDevices();
+
+  if(SIMULATION_MODE){
+    while(true){
+      Serial1.println("PING");
+      if(Serial1.available() == 0){
+        delay(1000);
+      }else{
+        String response = Serial1.readStringUntil('\n');
+        if(response == "TRUE"){
+          Serial1.println("Simulation initialized");
+          break;
+        }
+      }
+    }
+  }
+
+  statusIndicator.off();
 
   SPI.setMOSI(PinDefs.SDI);
   SPI.setMISO(PinDefs.SDO);
@@ -244,18 +306,11 @@ void setup() {
   ACAN2517FDSettings settings(
       ACAN2517FDSettings::OSC_40MHz, 1000ll * 1000ll, DataBitRateFactor::x1);  
 
-  // The atmega32u4 on the CANbed has only a tiny amount of memory.
-  // The ACAN2517FD driver needs custom settings so as to not exhaust
-  // all of SRAM just with its buffers.
-  settings.mArbitrationSJW = 2;
-  settings.mDriverTransmitFIFOSize = 1;
-  settings.mDriverReceiveFIFOSize = 2;
-
   const uint32_t errorCode = can.begin(settings, [] { can.isr(); });
 
   while (errorCode != 0) {
     char buffer[128];
-    snprintf(buffer, sizeof(buffer), "CAN initialization failed with error code: %ld", errorCode);
+    snprintf(buffer, sizeof(buffer), "CAN initialization failed with error code: %ld", errorCode); //TODO: Doesn't work
     logging.log(buffer);
     delay(1000);
   }      
@@ -263,9 +318,6 @@ void setup() {
   // To clear any faults the controllers may have, we start by sending
   // a stop command to each.
   moteus1.SetStop();
-
-  position_fmt.velocity_limit = Moteus::kFloat;
-  position_fmt.accel_limit = Moteus::kFloat;
 
   while (!adxl345.begin()) {
     logging.log("Error connecting to ADXL345 sensor");
@@ -284,15 +336,38 @@ void setup() {
 
   logging.flush();
 
-  MotorRoutines::runToEnd(moteus1, 5, 0.5);
+  //MotorRoutines::runToEnd(moteus1, 5, 0.5);
 
   Serial1.println("Motor routine complete");
 
   // Create tasks
-  xTaskCreate(FastLoop, "FastLoop", 256, NULL, 3, &FastLoopHandle); // Highest priority
-  xTaskCreate(LogLoop, "LogLoop", 256, NULL, 2, &LogLoopHandle);
-  xTaskCreate(PrintLoop, "PrintLoop", 256, NULL, 1, &PrintLoopHandle);
-  xTaskCreate(FlushLoop, "FlushLoop", 256, NULL, 1, &FlushLoopHandle);
+  //xSerialMutex = xSemaphoreCreateMutex();
+  Serial1.print("Free heap before tasks: ");
+  Serial1.println(xPortGetFreeHeapSize());
+
+  if (xTaskCreate(FastLoop, "FastLoop", 256, NULL, 3, &FastLoopHandle) != pdPASS)
+  {
+    Serial1.println("FastLoop task creation failed!");
+    while (1);
+  }
+  if (xTaskCreate(LogLoop, "LogLoop", 128, NULL, 2, &LogLoopHandle) != pdPASS)
+  {
+    Serial1.println("LogLoop task creation failed!");
+    while (1);
+  }
+  if (xTaskCreate(PrintLoop, "PrintLoop", 128, NULL, 1, &PrintLoopHandle) != pdPASS)
+  {
+    Serial1.println("PrintLoop task creation failed!");
+    while (1);
+  }
+  if (xTaskCreate(FlushLoop, "FlushLoop", 64, NULL, 1, &FlushLoopHandle) != pdPASS)
+  {
+    Serial1.println("FlushLoop task creation failed!");
+    while (1);
+  }
+
+  Serial1.print("Free heap after tasks: ");
+  Serial1.println(xPortGetFreeHeapSize());
 
   statusIndicator.solid(StatusIndicator::GREEN);
 
@@ -301,8 +376,6 @@ void setup() {
   // Start FreeRTOS scheduler
   vTaskStartScheduler();
 }
-
-uint16_t gLoopCount = 0;
 
 void loop() {
 

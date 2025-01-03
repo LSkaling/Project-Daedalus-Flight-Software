@@ -1,32 +1,39 @@
 import serial
 import time
 import random
+import serial.tools.list_ports
+import struct
+import threading
+
+buffer = ""
 
 # Initialize Serial
-ser = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)
+def find_usb_device():
+    ports = serial.tools.list_ports.comports()
+    for port in ports:
+        if 'usbs' in port.device or 'COM' in port.device:
+            return port.device
+    raise Exception("No USB serial device found")
+
+
+ser = serial.Serial(find_usb_device(), 230400, timeout=1)
+print(f"Connected to {ser.name}")
 time.sleep(2)  # Allow board to reset
 
-# Enter Simulation Mode
-ser.write(b"SIM\n")
-
-# Simulated Sensor Data Generation
-def simulate_sensors():
-    x = random.randint(-200, 200)  # Simulate acceleration
-    y = random.randint(-200, 200)
-    z = random.randint(900, 1100)  # Simulate 1g
-    pressure = random.randint(100000, 102000)  # Simulated pressure (Pa)
-    return x, y, z, pressure
-
 while True:
-    # Listen for STM32 requests
-    request = ser.readline().decode().strip()
-    
-    if request == "REQ_ACCEL":
-        x, y, z, _ = simulate_sensors()
-        ser.write(f"{x},{y},{z}\n".encode())
-
-    elif request == "REQ_PRESSURE":
-        _, _, _, pressure = simulate_sensors()
-        ser.write(f"{pressure}\n".encode())
-
-    time.sleep(0.05)  # 50 Hz update rate
+    # Read all available data in the buffer
+    if ser.in_waiting > 0:
+        buffer += ser.read(ser.in_waiting).decode('utf-8')
+        
+        # Process lines if newline received
+        while '\n' in buffer:
+            line, buffer = buffer.split('\n', 1)
+            line = line.strip()
+            
+            if line == 'REQ_DATA':
+                ser.write(b"0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,10,0.5,5.2,0.53\n")
+                #print("Data request received")
+            elif line == "PING":
+                ser.write(b"TRUE\n")
+            elif line:
+                print(f"IN: {line}")

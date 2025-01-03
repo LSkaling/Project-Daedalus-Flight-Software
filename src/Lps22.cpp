@@ -1,4 +1,5 @@
 #include "Lps22.h"
+//#include "ShitlSerial.h"
 
 Lps22::Lps22(uint8_t address)
 {
@@ -7,6 +8,7 @@ Lps22::Lps22(uint8_t address)
 
 bool Lps22::begin()
 {
+
     uint8_t deviceId = readRegister(0x0F);
     if (deviceId != 0xB3)
     {
@@ -21,7 +23,7 @@ bool Lps22::begin()
     return true;
 }
 
-void Lps22::readPressure(int32_t *pressure)
+void Lps22::readPressure(float *pressure)
 {
     uint8_t buffer[3];
 
@@ -54,10 +56,12 @@ void Lps22::readPressure(int32_t *pressure)
     }
 
     // Combine bytes into 24-bit signed value
-    *pressure = (int32_t)(buffer[2] << 16 | buffer[1] << 8 | buffer[0]);
+    int32_t raw_pressure = (int32_t)(buffer[2] << 16 | buffer[1] << 8 | buffer[0]);
+
+    *pressure = float(raw_pressure) / 4096;
 }
 
-void Lps22::readTemperature(int16_t *temperature)
+void Lps22::readTemperature(float *temperature)
 {
     uint8_t buffer[2];
 
@@ -90,7 +94,9 @@ void Lps22::readTemperature(int16_t *temperature)
     }
 
     // Combine bytes into 16-bit signed value
-    *temperature = (int16_t)(buffer[1] << 8 | buffer[0]);
+    int16_t raw_temperature = (int16_t)(buffer[1] << 8 | buffer[0]);
+
+    *temperature = float(raw_temperature) / 100;
 }
 
 void Lps22::writeRegister(uint8_t reg, uint8_t value)
