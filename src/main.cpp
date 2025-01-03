@@ -13,9 +13,9 @@
 #include <Logging.h>
 #include <STM32FreeRTOS.h>
 #include <States.cpp>
-#include <i2c_scanner.h>
+//#include <i2c_scanner.h>
 
-const bool SIMULATION_MODE = true;
+const bool SIMULATION_MODE = false;
 
 SemaphoreHandle_t xSerialMutex;
 
@@ -213,17 +213,17 @@ void PrintLoop(void *pvParameters)
 
         Serial1.print(millis());
         Serial1.print("\t");
-        Serial1.print(x);
+        Serial1.print(x, 4);
         Serial1.print("\t");
-        Serial1.print(x_hg);
+        Serial1.print(x_hg, 4);
         Serial1.print("\t");
-        Serial1.print(y);
+        Serial1.print(y, 4);
         Serial1.print("\t");
-        Serial1.print(y_hg);
+        Serial1.print(y_hg, 4);
         Serial1.print("\t");
-        Serial1.print(z);
+        Serial1.print(z, 4);
         Serial1.print("\t");
-        Serial1.print(z_hg);
+        Serial1.print(z_hg, 4);
         Serial1.print("\t");
         Serial1.print(pressure);
         Serial1.print("\t");
