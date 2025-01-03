@@ -17,7 +17,7 @@
 
 const bool SIMULATION_MODE = true;
 
-//SemaphoreHandle_t xSerialMutex;
+SemaphoreHandle_t xSerialMutex;
 
 // ADXL345 scaling factor
 const float scale345 = 0.0039; // ±16g at 4 mg/LSB
@@ -93,33 +93,37 @@ void FastLoop(void *pvParameters)
     if (SIMULATION_MODE)
     {
       // Request data from serial
-      //Serial1.println("Requesting Data");
-      Serial1.println("REQ_DATA");
-      while (Serial1.available() == 0)
+
+      if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
       {
-        statusIndicator.solid(StatusIndicator::RED);
+
+        Serial1.println("REQ_DATA");
+        while (Serial1.available() == 0)
+        {
+          // statusIndicator.solid(StatusIndicator::RED);
+        }
+        // statusIndicator.solid(StatusIndicator::GREEN);
+        // Serial1.println("Data received");
+        String data = Serial1.readStringUntil('\n');
+        // Serial1.println("Read data");
+        String dataParts[12];
+        splitString(data, ',', dataParts, 12);
+
+        x = dataParts[0].toFloat();
+        x_hg = dataParts[1].toFloat();
+        y = dataParts[2].toFloat();
+        y_hg = dataParts[3].toFloat();
+        z = dataParts[4].toFloat();
+        z_hg = dataParts[5].toFloat();
+        pressure = dataParts[6].toFloat();
+        temperature = dataParts[7].toFloat();
+        mode = dataParts[8].toInt();
+        position = dataParts[9].toFloat();
+        velocity = dataParts[10].toFloat();
+        current = dataParts[11].toFloat();
+
+        xSemaphoreGive(xSerialMutex);
       }
-      statusIndicator.solid(StatusIndicator::GREEN);
-      //Serial1.println("Data received");
-      String data = Serial1.readStringUntil('\n');
-      //Serial1.println("Read data");
-      String dataParts[12];
-      splitString(data, ',', dataParts, 12);
-
-      x = dataParts[0].toFloat();
-      x_hg = dataParts[1].toFloat();
-      y = dataParts[2].toFloat();
-      y_hg = dataParts[3].toFloat();
-      z = dataParts[4].toFloat();
-      z_hg = dataParts[5].toFloat();
-      pressure = dataParts[6].toFloat();
-      temperature = dataParts[7].toFloat();
-      mode = dataParts[8].toInt();
-      position = dataParts[9].toFloat();
-      velocity = dataParts[10].toFloat();
-      current = dataParts[11].toFloat();
-
-    //   //xSemaphoreGive(xSerialMutex);
     }
     else
     {
@@ -144,7 +148,7 @@ void FastLoop(void *pvParameters)
       z_hg = z_raw_hg * scale375;
    }
 
-    vTaskDelay(200); // Run at 50hz
+    vTaskDelay(20); // Run at 50hz
   }
 }
 
@@ -200,55 +204,56 @@ void PrintLoop(void *pvParameters)
 {
   while (true)
   {
-    if(millis() % 2000 < 1000){
-      statusIndicator.solid(StatusIndicator::RED);
-    } else{
-      statusIndicator.solid(StatusIndicator::BLUE);
+    // if(millis() % 2000 < 1000){
+    //   statusIndicator.solid(StatusIndicator::RED);
+    // } else{
+    //   statusIndicator.solid(StatusIndicator::BLUE);
+    // }
+    if(xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE){
+
+        Serial1.print(millis());
+        Serial1.print("\t");
+        Serial1.print(x);
+        Serial1.print("\t");
+        Serial1.print(x_hg);
+        Serial1.print("\t");
+        Serial1.print(y);
+        Serial1.print("\t");
+        Serial1.print(y_hg);
+        Serial1.print("\t");
+        Serial1.print(z);
+        Serial1.print("\t");
+        Serial1.print(z_hg);
+        Serial1.print("\t");
+        Serial1.print(pressure);
+        Serial1.print("\t");
+        Serial1.print(temperature);
+        Serial1.print("\t");
+        Serial1.print(mode);
+        Serial1.print("\t");
+        Serial1.print(position);
+        Serial1.print("\t");
+        Serial1.print(velocity);
+        Serial1.print("\t");
+        Serial1.print(current);
+        // Serial1.print("\t");
+        // Serial1.print(xPortGetFreeHeapSize());
+        // Serial1.print("\t");
+        // Serial1.print(uxTaskGetStackHighWaterMark(FastLoopHandle));
+        // Serial1.print("\t");
+        // Serial1.print(uxTaskGetStackHighWaterMark(LogLoopHandle));
+        // Serial1.print("\t");
+        // Serial1.print(uxTaskGetStackHighWaterMark(PrintLoopHandle));
+        // Serial1.print("\t");
+        // Serial1.print(uxTaskGetStackHighWaterMark(FlushLoopHandle));
+        Serial1.println();
+
+
+
+      xSemaphoreGive(xSerialMutex);
     }
-    //if(xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE){
-      Serial1.print("Time: ");
-      Serial1.print(millis());
-      Serial1.print(" Xg: ");
-      Serial1.print(x);
-      Serial1.print(" Xg2: ");
-      Serial1.print(x_hg);
-      Serial1.print(" Yg: ");
-      Serial1.print(y);
-      Serial1.print(" Yg2: ");
-      Serial1.print(y_hg);
-      Serial1.print(" Zg: ");
-      Serial1.print(z);
-      Serial1.print(" Zg2: ");
-      Serial1.print(z_hg);
-      Serial1.print(" Pressure: ");
-      Serial1.print(pressure);
-      Serial1.print(" Temperature: ");
-      Serial1.print(temperature);
-      Serial1.print(" Mode: ");
-      Serial1.print(mode);
-      Serial1.print(" Position: ");
-      Serial1.print(position);
-      Serial1.print(" Velocity: ");
-      Serial1.print(velocity);
-      Serial1.print(" Current: ");
-      Serial1.print(current);
-      Serial1.print(" Heap: ");
-      Serial1.print(xPortGetFreeHeapSize());
-      Serial1.print(" Fast loop:");
-      Serial1.print(uxTaskGetStackHighWaterMark(FastLoopHandle));
-      Serial1.print(" Log loop:");
-      Serial1.print(uxTaskGetStackHighWaterMark(LogLoopHandle));
-      Serial1.print(" Print loop:");
-      Serial1.print(uxTaskGetStackHighWaterMark(PrintLoopHandle));
-      Serial1.print(" Flush loop:");
-      Serial1.print(uxTaskGetStackHighWaterMark(FlushLoopHandle));
-      Serial1.println();
-
-
-      //xSemaphoreGive(xSerialMutex);
-    //}
-    vTaskDelay(500); // 200 ms = 5 Hz
-  }
+    vTaskDelay(250); // 200 ms = 5 Hz
+    }
 }
 
 // 0.5 Hz SD Card Flush Task
@@ -257,8 +262,13 @@ void FlushLoop(void *pvParameters)
   while (true)
   {
     logging.flush();
-    vTaskDelay(2000); // 2000 ms = 0.5 Hz
-  }
+    if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
+    {
+      Serial1.println("ms\t\tx\t\ty\t\tz\t\tp\tt\tmode\tpos\tvel\tI");
+      xSemaphoreGive(xSerialMutex);
+    }
+      vTaskDelay(4000); // 2000 ms = 0.5 Hz
+    }
 }
 
 void setup() {
@@ -341,7 +351,7 @@ void setup() {
   Serial1.println("Motor routine complete");
 
   // Create tasks
-  //xSerialMutex = xSemaphoreCreateMutex();
+  xSerialMutex = xSemaphoreCreateMutex();
   Serial1.print("Free heap before tasks: ");
   Serial1.println(xPortGetFreeHeapSize());
 
