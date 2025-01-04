@@ -1,3 +1,3 @@
-mjbots/Moteus@^1.0.2
 arduino-libraries/SD@^1.3.0
-/Users/lawtonskaling/Documents/PlatformIO/Projects/FlyingPhoque7Barebones3/lib/STM32FreeRTOS
+lib/STM32FreeRTOS
+mjbots/Moteus@^1.0.2
