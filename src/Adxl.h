@@ -12,7 +12,7 @@ class Adxl {
   public:
     Adxl(uint8_t address, ADXL_TYPE adxlType);
     bool begin();
-    void readAccelerometer(int16_t *x, int16_t *y, int16_t *z);
+    void readAccelerometer(float *x, float *y, float *z);
 
   private:
     //TwoWire Wire;
@@ -21,6 +21,7 @@ class Adxl {
     void readRegisters(uint8_t reg, uint8_t *buffer, uint8_t len);
     uint8_t ADXL_ADDRESS;
     ADXL_TYPE adxlType;
+    float g_per_LSB;
 };
 
 #endif

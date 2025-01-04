@@ -4,6 +4,14 @@ Adxl::Adxl(uint8_t address, ADXL_TYPE adxlType)
 {
     ADXL_ADDRESS = address;
     adxlType = adxlType;
+    if(adxlType == ADXL345)
+    {
+        g_per_LSB = 0.0040; // ±16g at 4 mg/LSB
+    }
+    else if(adxlType == ADXL375)
+    {
+        g_per_LSB = 0.049; // ±200g at ~49 mg/LSB
+    }
 }
 
 bool Adxl::begin()
@@ -17,11 +25,17 @@ bool Adxl::begin()
     }
 
     writeRegister(0x2D, 0x08); // Power on the sensor
-    writeRegister(0x31, 0x09); // Resolution and range: ±16g or appropriate setting for ADXL375
+    if(adxlType == ADXL345)
+    {
+        writeRegister(0x31, 0x0B); // Resolution and range: ±16g or appropriate setting for ADXL345
+    }
+    else if(adxlType == ADXL375){
+      writeRegister(0x31, 0x0B); // Resolution and range: ±16g or appropriate setting for ADXL375
+    }
     return true;
 }
 
-void Adxl::readAccelerometer(int16_t *x, int16_t *y, int16_t *z)
+void Adxl::readAccelerometer(float *x, float *y, float *z)
 {
   uint8_t buffer[6];
 
@@ -54,9 +68,14 @@ void Adxl::readAccelerometer(int16_t *x, int16_t *y, int16_t *z)
   }
 
   // Combine bytes into 16-bit signed values
-  *x = (int16_t)(buffer[1] << 8 | buffer[0]);
-  *y = (int16_t)(buffer[3] << 8 | buffer[2]);
-  *z = (int16_t)(buffer[5] << 8 | buffer[4]);
+  int16_t x_raw = (int16_t)(buffer[1] << 8 | buffer[0]);
+  int16_t y_raw = (int16_t)(buffer[3] << 8 | buffer[2]);
+  int16_t z_raw = (int16_t)(buffer[5] << 8 | buffer[4]);
+
+  // Convert raw values to 'g' units
+  *x = x_raw * g_per_LSB;
+  *y = y_raw * g_per_LSB;
+  *z = z_raw * g_per_LSB;
 
   // Optional: Print the raw data for debugging
   // Serial1.print("X: "); Serial1.print(*x);

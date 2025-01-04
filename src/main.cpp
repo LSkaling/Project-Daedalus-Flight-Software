@@ -12,18 +12,13 @@
 #include <StatusIndicator.h>
 #include <Logging.h>
 #include <STM32FreeRTOS.h>
-#include <States.cpp>
+#include <States.h>
+#include <Igniter.h>
 //#include <i2c_scanner.h>
 
 const bool SIMULATION_MODE = false;
 
 SemaphoreHandle_t xSerialMutex;
-
-// ADXL345 scaling factor
-const float scale345 = 0.0039; // ±16g at 4 mg/LSB
-
-// ADXL375 scaling factor
-const float scale375 = 0.049; // ±200g at ~49 mg/LSB
 
 float x, y, z, x_hg, y_hg, z_hg;
 
@@ -32,6 +27,9 @@ float position, velocity, current;
 
 float pressure;
 float temperature;
+
+bool primaryIgniterConnected = false;
+bool backupIgniterConnected = false;
 
 const char* logVariables[] = {
     "Time",
@@ -56,6 +54,8 @@ File dataFile;
 Adxl adxl345 = Adxl(0x1D, ADXL345);
 Adxl adxl375 = Adxl(0x53, ADXL375);
 Lps22 lps22 = Lps22(0x5C);
+Igniter primaryIgniter = Igniter(PinDefs.IGNITER_0, PinDefs.IGNITER_SENSE_0);
+Igniter backupIgniter = Igniter(PinDefs.IGNITER_1, PinDefs.IGNITER_SENSE_1);
 StatusIndicator statusIndicator = StatusIndicator(PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
 States state = States::IDLE;
 
@@ -127,25 +127,12 @@ void FastLoop(void *pvParameters)
     }
     else
     {
-      // Serial1.println("Test");
-      int16_t x_raw, y_raw, z_raw;
-      adxl345.readAccelerometer(&x_raw, &y_raw, &z_raw);
 
-      int16_t x_raw_hg, y_raw_hg, z_raw_hg;
-      adxl375.readAccelerometer(&x_raw_hg, &y_raw_hg, &z_raw_hg);
+      adxl345.readAccelerometer(&x, &y, &z);
+      adxl375.readAccelerometer(&x_hg, &y_hg, &z_hg);
 
       lps22.readPressure(&pressure);
-
       lps22.readTemperature(&temperature);
-
-      // Convert raw values to 'g' units (assuming 4 mg/LSB at +/-16g)
-      x = x_raw * scale345;
-      y = y_raw * scale345;
-      z = z_raw * scale345;
-
-      x_hg = x_raw_hg * scale375;
-      y_hg = y_raw_hg * scale375;
-      z_hg = z_raw_hg * scale375;
    }
 
     vTaskDelay(20); // Run at 50hz
@@ -160,7 +147,6 @@ void LogLoop(void *pvParameters)
     switch (state)
     {
     case States::IDLE:
-      /* code */
       break;
     
     case States::ARMED:
@@ -213,17 +199,19 @@ void PrintLoop(void *pvParameters)
 
         Serial1.print(millis());
         Serial1.print("\t");
-        Serial1.print(x, 4);
+        Serial1.print(stateToString(state));
         Serial1.print("\t");
-        Serial1.print(x_hg, 4);
+        Serial1.print(x, 3);
         Serial1.print("\t");
-        Serial1.print(y, 4);
+        Serial1.print(x_hg, 3);
         Serial1.print("\t");
-        Serial1.print(y_hg, 4);
+        Serial1.print(y, 3);
         Serial1.print("\t");
-        Serial1.print(z, 4);
+        Serial1.print(y_hg, 3);
         Serial1.print("\t");
-        Serial1.print(z_hg, 4);
+        Serial1.print(z, 3);
+        Serial1.print("\t");
+        Serial1.print(z_hg, 3);
         Serial1.print("\t");
         Serial1.print(pressure);
         Serial1.print("\t");
@@ -236,6 +224,11 @@ void PrintLoop(void *pvParameters)
         Serial1.print(velocity);
         Serial1.print("\t");
         Serial1.print(current);
+        Serial1.print("\t");
+        Serial1.print(primaryIgniterConnected);
+        Serial1.print("\t");
+        Serial1.print(backupIgniterConnected);
+
         // Serial1.print("\t");
         // Serial1.print(xPortGetFreeHeapSize());
         // Serial1.print("\t");
@@ -264,7 +257,7 @@ void FlushLoop(void *pvParameters)
     logging.flush();
     if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
     {
-      Serial1.println("ms\t\tx\t\ty\t\tz\t\tp\tt\tmode\tpos\tvel\tI");
+      Serial1.println("ms\tmode\tx\t\ty\t\tz\t\tp\tt\tmode\tpos\tvel\tI\tPI\tBI");
       xSemaphoreGive(xSerialMutex);
     }
       vTaskDelay(4000); // 2000 ms = 0.5 Hz
