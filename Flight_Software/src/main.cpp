@@ -147,6 +147,9 @@ void LogLoop(void *pvParameters)
     switch (state)
     {
     case States::IDLE:
+      if(millis() > 8000){
+        state = States::ARMED;
+      }
       break;
     
     case States::ARMED:

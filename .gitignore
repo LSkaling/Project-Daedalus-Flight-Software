@@ -6,3 +6,8 @@ Flight_Software/.vscode/ipch
 Simulation_Software/venv
 .DS_Store
 Project Daedalus Software.code-workspace
+Wireless_Interface_Software/.pio
+Wireless_Interface_Software/.vscode/.browse.c_cpp.db*
+Wireless_Interface_Software/.vscode/c_cpp_properties.json
+Wireless_Interface_Software/.vscode/launch.json
+Wireless_Interface_Software/.vscode/ipch
