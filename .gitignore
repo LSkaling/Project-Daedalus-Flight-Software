@@ -4,3 +4,4 @@ Flight_Software/.vscode/c_cpp_properties.json
 Flight_Software/.vscode/launch.json
 Flight_Software/.vscode/ipch
 Simulation_Software/venv
+.DS_Store
