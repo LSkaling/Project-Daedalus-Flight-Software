@@ -14,6 +14,7 @@
 #include <STM32FreeRTOS.h>
 #include <States.h>
 #include <Igniter.h>
+#include <Clutch.h>
 //#include <i2c_scanner.h>
 
 const bool SIMULATION_MODE = false;
@@ -54,6 +55,7 @@ File dataFile;
 Adxl adxl345 = Adxl(0x1D, ADXL345);
 Adxl adxl375 = Adxl(0x53, ADXL375);
 Lps22 lps22 = Lps22(0x5C);
+Clutch clutch = Clutch(PinDefs.SERVO, 0, 180); //TODO: is this in deg?
 Igniter primaryIgniter = Igniter(PinDefs.IGNITER_0, PinDefs.IGNITER_SENSE_0);
 Igniter backupIgniter = Igniter(PinDefs.IGNITER_1, PinDefs.IGNITER_SENSE_1);
 StatusIndicator statusIndicator = StatusIndicator(PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
@@ -64,6 +66,9 @@ Moteus moteus1(can, []() {
   options.id = 1;
   return options;
 }());
+
+float motor_travel_distance = 448;
+float motor_offset = -250.16;
 
 TaskHandle_t FastLoopHandle;
 TaskHandle_t LogLoopHandle;
@@ -127,12 +132,16 @@ void FastLoop(void *pvParameters)
     }
     else
     {
-
       adxl345.readAccelerometer(&x, &y, &z);
       adxl375.readAccelerometer(&x_hg, &y_hg, &z_hg);
 
       lps22.readPressure(&pressure);
       lps22.readTemperature(&temperature);
+
+      Moteus::Result lastResult = moteus1.last_result();
+      //mode = lastResult.values.mode; //TODO: how to get value associated with enum?
+      velocity = lastResult.values.velocity;
+      position = lastResult.values.position;
    }
 
     vTaskDelay(20); // Run at 50hz
@@ -325,6 +334,8 @@ void setup() {
   // a stop command to each.
   moteus1.SetStop();
 
+  clutch.begin();
+
   while (!adxl345.begin()) {
     logging.log("Error connecting to ADXL345 sensor");
     delay(1000);
@@ -342,7 +353,22 @@ void setup() {
 
   logging.flush();
 
-  //MotorRoutines::runToEnd(moteus1, 5, 0.5);
+  // //MotorRoutines::runToEnd(moteus1, 5, 0.5);
+  // motor_travel_distance = MotorRoutines::measureTravelDistance(moteus1, 50, 3);
+
+  // Moteus::Result lastResult = moteus1.last_result();
+  // // mode = lastResult.values.mode; //TODO: how to get value associated with enum?
+  // position = lastResult.values.position;
+  // motor_offset = position;
+
+  // // run motor to center
+  // float center_position = motor_offset + motor_travel_distance / 2;
+  MotorRoutines::moveToPositionBlocking(moteus1, center_position, 50, 15);
+
+  clutch.disengage();
+
+  Serial1.println("Motor offset: " + String(motor_offset));
+  Serial1.println("Motor travel distance: " + String(motor_travel_distance));
 
   Serial1.println("Motor routine complete");
 
