@@ -23,6 +23,8 @@ SemaphoreHandle_t xSerialMutex;
 
 float x, y, z, x_hg, y_hg, z_hg;
 
+float angle;
+
 uint32_t mode;
 float position, velocity, current;
 
@@ -90,6 +92,13 @@ void splitString(String data, char delimiter, String parts[], int maxParts)
   parts[i] = data; // Last part (or whole if no delimiter left)
 }
 
+float calculateAngle(float ax, float ay, float az)
+{
+  float magnitude = sqrt(ax * ax + ay * ay + az * az);
+  float angle = atan2(az, ay);
+  return angle * (180.0 / 3.14);          // Convert to degrees
+}
+
 // Fast Loop (Read sensors, Write motor)
 void FastLoop(void *pvParameters)
 {
@@ -142,6 +151,8 @@ void FastLoop(void *pvParameters)
       //mode = lastResult.values.mode; //TODO: how to get value associated with enum?
       velocity = lastResult.values.velocity;
       position = lastResult.values.position;
+
+      angle = calculateAngle(x, y, z);
    }
 
     vTaskDelay(20); // Run at 50hz
@@ -162,7 +173,6 @@ void LogLoop(void *pvParameters)
       break;
     
     case States::ARMED:
-      /* code */
       break;
 
     case States::IGNITION:
@@ -225,6 +235,8 @@ void PrintLoop(void *pvParameters)
         Serial1.print("\t");
         Serial1.print(z_hg, 3);
         Serial1.print("\t");
+        Serial1.print(angle, 3);
+        Serial1.print("\t");
         Serial1.print(pressure);
         Serial1.print("\t");
         Serial1.print(temperature);
@@ -269,7 +281,7 @@ void FlushLoop(void *pvParameters)
     logging.flush();
     if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
     {
-      Serial1.println("ms\tmode\tx\t\ty\t\tz\t\tp\tt\tmode\tpos\tvel\tI\tPI\tBI");
+      Serial1.println("ms\tmode\tx\t\ty\t\tz\t\ttheta\tp\tt\tmode\tpos\tvel\tI\tPI\tBI");
       xSemaphoreGive(xSerialMutex);
     }
       vTaskDelay(4000); // 2000 ms = 0.5 Hz
@@ -363,7 +375,10 @@ void setup() {
 
   // // run motor to center
   // float center_position = motor_offset + motor_travel_distance / 2;
-  MotorRoutines::moveToPositionBlocking(moteus1, center_position, 50, 15);
+  // MotorRoutines::moveToPositionBlocking(moteus1, center_position, 50, 15);
+
+  Serial1.println("Motor location:");
+  Serial1.println(moteus1.last_result().values.position);
 
   clutch.disengage();
 

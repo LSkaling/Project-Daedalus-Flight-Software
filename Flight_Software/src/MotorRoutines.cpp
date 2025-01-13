@@ -150,3 +150,15 @@ void MotorRoutines::moveToPositionBlocking(Moteus &motor, float position, float 
         delay(50); // 50 ms = 20 Hz
     }
 }
+
+void MotorRoutines::moveToPosition(Moteus &motor, float position, float velocity, float current, float minPos, float maxPos){
+    Moteus::PositionMode::Command cmd;
+    cmd.position = position;
+    cmd.velocity = NaN;
+
+    Moteus::PositionMode::Format format;
+    format.velocity_limit = Moteus::kFloat;
+    cmd.velocity_limit = velocity;
+
+    motor.SetPosition(cmd, &format);
+}
