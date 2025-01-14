@@ -19,11 +19,19 @@
 
 const bool SIMULATION_MODE = false;
 
+const float movement_ratio = 1.4089; //Converts from motor frame to weight frame
+float motor_frame_offset = -230.10;
+float balance_frame_offset = 350;
+
 SemaphoreHandle_t xSerialMutex;
 
 float x, y, z, x_hg, y_hg, z_hg;
 
-float angle;
+float theta;
+float theta_dot;
+
+float altitude;
+float vertical_velocity;
 
 uint32_t mode;
 float position, velocity, current;
@@ -69,8 +77,9 @@ Moteus moteus1(can, []() {
   return options;
 }());
 
-float motor_travel_distance = 448;
-float motor_offset = -250.16;
+
+const float K_P = 0.1;
+const float K_D = 0.1;
 
 TaskHandle_t FastLoopHandle;
 TaskHandle_t LogLoopHandle;
@@ -97,6 +106,23 @@ float calculateAngle(float ax, float ay, float az)
   float magnitude = sqrt(ax * ax + ay * ay + az * az);
   float angle = atan2(az, ay);
   return angle * (180.0 / 3.14);          // Convert to degrees
+}
+
+float weight_frame_to_motor_frame(float pos){
+  return pos / movement_ratio + motor_frame_offset;
+}
+float motor_frame_to_weight_frame(float pos){
+  return (pos - motor_frame_offset) * movement_ratio;
+}
+float balance_frame_to_motor_frame(float pos){
+  float pos_offset = pos + balance_frame_offset;
+  return weight_frame_to_motor_frame(pos_offset);
+}
+
+float calculateAltitude(float pressure, float temperature)
+{
+  float altitude = (1 - pow((pressure / 1013.25), 0.1903)) * 145366.45;
+  return altitude;
 }
 
 // Fast Loop (Read sensors, Write motor)
@@ -152,7 +178,6 @@ void FastLoop(void *pvParameters)
       velocity = lastResult.values.velocity;
       position = lastResult.values.position;
 
-      angle = calculateAngle(x, y, z);
    }
 
     vTaskDelay(20); // Run at 50hz
@@ -173,6 +198,17 @@ void LogLoop(void *pvParameters)
       break;
     
     case States::ARMED:
+      // float new_theta = calculateAngle(x, y, z);
+      // theta_dot = (new_theta - theta) / 0.02;
+      // theta = new_theta;
+
+      // float new_altitude = calculateAltitude(pressure, temperature);
+      // vertical_velocity = (new_altitude - altitude) / 0.02;
+      // altitude = new_altitude;
+
+      // float weight_position = theta * K_P + theta_dot * K_D; //TODO: Add scaling for acceleration
+
+      // MotorRoutines::moveToPosition(moteus1, 0, 0.1, 0.1); //TODO: Add
       break;
 
     case States::IGNITION:
@@ -188,7 +224,19 @@ void LogLoop(void *pvParameters)
       break;
 
     case States::BELLYFLOP:
-      /* code */
+      // float new_theta = calculateAngle(x, y, z);
+      // theta_dot = (new_theta - theta) / 0.02;
+      // theta = new_theta;
+
+      // float new_altitude = calculateAltitude(pressure, temperature);
+      // vertical_velocity = (new_altitude - altitude) / 0.02;
+      // altitude = new_altitude;
+
+      // float weight_position = theta * K_P + theta_dot * K_D; //TODO: Add scaling for acceleration
+
+      //MotorRoutines::moveToPosition(moteus1, 0, 0.1, 0.1); //TODO: Add
+
+
       break;
 
     case States::CHUTE:
@@ -235,7 +283,7 @@ void PrintLoop(void *pvParameters)
         Serial1.print("\t");
         Serial1.print(z_hg, 3);
         Serial1.print("\t");
-        Serial1.print(angle, 3);
+        Serial1.print(theta, 3);
         Serial1.print("\t");
         Serial1.print(pressure);
         Serial1.print("\t");
@@ -243,7 +291,7 @@ void PrintLoop(void *pvParameters)
         Serial1.print("\t");
         Serial1.print(mode);
         Serial1.print("\t");
-        Serial1.print(position);
+        Serial1.print(motor_frame_to_weight_frame(position));
         Serial1.print("\t");
         Serial1.print(velocity);
         Serial1.print("\t");
@@ -365,8 +413,29 @@ void setup() {
 
   logging.flush();
 
-  // //MotorRoutines::runToEnd(moteus1, 5, 0.5);
-  // motor_travel_distance = MotorRoutines::measureTravelDistance(moteus1, 50, 3);
+  //uncomment to measure motor travel distance after power cycle
+  //motor_frame_offset = MotorRoutines::runToEnd(moteus1, -50, 3);
+
+  // for (int i = 0; i < 400; i+=50)
+  // {
+  //   float motor_frame = weight_frame_to_motor_frame(i);
+  //   MotorRoutines::moveToPositionBlocking(moteus1, motor_frame, 50, 3);
+  //   delay(5000);
+  // }
+
+  MotorRoutines::moveToPositionBlocking(moteus1, weight_frame_to_motor_frame(0), 50, 3);
+  MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(0), 50, 3);
+
+  delay(5000);
+
+  MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(50), 50, 3);
+
+  delay(5000);
+
+  MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(-50), 50, 3);
+
+  //MotorRoutines::runToEnd(moteus1, 5, 0.5);
+  //motor_travel_distance = MotorRoutines::measureTravelDistance(moteus1, 50, 3);
 
   // Moteus::Result lastResult = moteus1.last_result();
   // // mode = lastResult.values.mode; //TODO: how to get value associated with enum?
@@ -377,13 +446,19 @@ void setup() {
   // float center_position = motor_offset + motor_travel_distance / 2;
   // MotorRoutines::moveToPositionBlocking(moteus1, center_position, 50, 15);
 
+  // run motor to 0
+  // MotorRoutines::moveToPositionBlocking(moteus1, 0, 50, 15);
+  // delay(5000);
+  // MotorRoutines::moveToPositionBlocking(moteus1, 100, 50, 15);
+  // delay(5000);
+
   Serial1.println("Motor location:");
   Serial1.println(moteus1.last_result().values.position);
 
   clutch.disengage();
 
-  Serial1.println("Motor offset: " + String(motor_offset));
-  Serial1.println("Motor travel distance: " + String(motor_travel_distance));
+  // Serial1.println("Motor offset: " + String(motor_offset));
+  // Serial1.println("Motor travel distance: " + String(motor_travel_distance));
 
   Serial1.println("Motor routine complete");
 

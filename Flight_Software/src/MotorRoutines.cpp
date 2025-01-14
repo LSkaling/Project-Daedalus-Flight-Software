@@ -4,7 +4,7 @@ MotorRoutines::MotorRoutines()
 {
 }
 
-bool MotorRoutines::runToEnd(Moteus &motor, float travel_velocity, float threashold_current)
+float MotorRoutines::runToEnd(Moteus &motor, float travel_velocity, float threashold_current)
 {
     Moteus::PositionMode::Command cmd;
     cmd.position = NaN;
@@ -34,19 +34,18 @@ bool MotorRoutines::runToEnd(Moteus &motor, float travel_velocity, float threash
         {
             Serial1.println("Found end stop");
             motor.SetStop();
-            return true;
+            return motor.last_result().values.position;
         }
 
         delay(50); // 50 ms = 20 Hz
     }
-    return false;
+    return 0;
 }
 
 float MotorRoutines::measureTravelDistance(Moteus &motor, float velocity, float current){
-    runToEnd(motor, velocity, current);
-    float topPosition = motor.last_result().values.position;
-    runToEnd(motor, -velocity, current);
-    return topPosition - motor.last_result().values.position;
+    float topPosition = runToEnd(motor, velocity, current);
+    float bottomPosition = runToEnd(motor, -velocity, current);
+    return topPosition - bottomPosition;
 }
 
 bool MotorRoutines::testClutch(Moteus &motor, Clutch &clutch, float maxCurrent){
