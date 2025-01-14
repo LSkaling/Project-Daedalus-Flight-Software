@@ -156,8 +156,11 @@ void MotorRoutines::moveToPosition(Moteus &motor, float position, float velocity
     cmd.velocity = NaN;
 
     Moteus::PositionMode::Format format;
+    format.accel_limit = Moteus::kFloat;
     format.velocity_limit = Moteus::kFloat;
+    cmd.accel_limit = 800;
     cmd.velocity_limit = velocity;
+
 
     motor.SetPosition(cmd, &format);
 }

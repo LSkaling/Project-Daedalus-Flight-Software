@@ -30,6 +30,9 @@ float x, y, z, x_hg, y_hg, z_hg;
 float theta;
 float theta_dot;
 
+float alpha = 0.1;       // Smoothing factor (adjust based on your needs)
+float filteredTheta = 0; // Initialize the filtered value
+
 float altitude;
 float vertical_velocity;
 
@@ -78,7 +81,7 @@ Moteus moteus1(can, []() {
 }());
 
 
-const float K_P = 0.1;
+const float K_P = 10;
 const float K_D = 0.1;
 
 TaskHandle_t FastLoopHandle;
@@ -103,9 +106,19 @@ void splitString(String data, char delimiter, String parts[], int maxParts)
 
 float calculateAngle(float ax, float ay, float az)
 {
-  float magnitude = sqrt(ax * ax + ay * ay + az * az);
-  float angle = atan2(az, ay);
-  return angle * (180.0 / 3.14);          // Convert to degrees
+  // float magnitude = sqrt(ax * ax + ay * ay + az * az);
+  // float angle = atan2(az, ay);
+  // return angle * (180.0 / 3.14);          // Convert to degrees
+
+  // Calculate the total magnitude of the acceleration vector
+  float magnitude = sqrt(x * x + y * y + z * z);
+
+  // Calculate the tilt angle in radians
+  float tiltAngle = acos(y / magnitude);
+
+  // Convert radians to degrees
+  tiltAngle = tiltAngle * 180.0 / PI;
+  return tiltAngle;
 }
 
 float weight_frame_to_motor_frame(float pos){
@@ -178,6 +191,8 @@ void FastLoop(void *pvParameters)
       velocity = lastResult.values.velocity;
       position = lastResult.values.position;
 
+      theta = calculateAngle(x, y, z);
+
    }
 
     vTaskDelay(20); // Run at 50hz
@@ -198,18 +213,25 @@ void LogLoop(void *pvParameters)
       break;
     
     case States::ARMED:
-      // float new_theta = calculateAngle(x, y, z);
-      // theta_dot = (new_theta - theta) / 0.02;
-      // theta = new_theta;
+    {
+
+      float new_theta = calculateAngle(x, y, z);
+      theta_dot = (new_theta - theta) / 0.02;
+      theta = new_theta;
+
+      filteredTheta = alpha * theta + (1 - alpha) * filteredTheta;
+
+      float theta_error = -filteredTheta + 90;
 
       // float new_altitude = calculateAltitude(pressure, temperature);
       // vertical_velocity = (new_altitude - altitude) / 0.02;
       // altitude = new_altitude;
 
-      // float weight_position = theta * K_P + theta_dot * K_D; //TODO: Add scaling for acceleration
+      float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
 
-      // MotorRoutines::moveToPosition(moteus1, 0, 0.1, 0.1); //TODO: Add
+      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 500, 5, 0, 0); //TODO: Add
       break;
+    }
 
     case States::IGNITION:
       /* code */
@@ -423,16 +445,16 @@ void setup() {
   //   delay(5000);
   // }
 
-  MotorRoutines::moveToPositionBlocking(moteus1, weight_frame_to_motor_frame(0), 50, 3);
-  MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(0), 50, 3);
+  // MotorRoutines::moveToPositionBlocking(moteus1, weight_frame_to_motor_frame(0), 50, 3);
+  // MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(0), 50, 3);
 
-  delay(5000);
+  // delay(5000);
 
-  MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(50), 50, 3);
+  // MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(50), 50, 3);
 
-  delay(5000);
+  // delay(5000);
 
-  MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(-50), 50, 3);
+  // MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(-50), 50, 3);
 
   //MotorRoutines::runToEnd(moteus1, 5, 0.5);
   //motor_travel_distance = MotorRoutines::measureTravelDistance(moteus1, 50, 3);
