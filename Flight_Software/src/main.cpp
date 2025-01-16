@@ -31,14 +31,14 @@ float x, y, z, x_hg, y_hg, z_hg;
 float theta;
 float theta_dot;
 
-float alpha = 0.02;       // Smoothing factor (adjust based on your needs)
+float alpha = 0.5;       // Smoothing factor (adjust based on your needs)
 float filteredTheta = 90; // Initialize the filtered value
 
 float altitude;
 float vertical_velocity;
 
 uint32_t mode;
-float position, velocity, current;
+float position, velocity, current, torque;
 
 float pressure;
 float temperature;
@@ -188,11 +188,17 @@ void FastLoop(void *pvParameters)
       lps22.readTemperature(&temperature);
 
       Moteus::Result lastResult = moteus1.last_result();
-      //mode = lastResult.values.mode; //TODO: how to get value associated with enum?
+      mode = static_cast<uint32_t>(lastResult.values.mode); // TODO: how to get value associated with enum?
       velocity = lastResult.values.velocity;
       position = lastResult.values.position;
+      current = lastResult.values.q_current;
+      torque = lastResult.values.torque;
 
       theta = calculateAngle(x, y, z);
+
+      if(mode == 11){
+        moteus1.SetStop();
+      }
 
    }
 
@@ -208,7 +214,7 @@ void LogLoop(void *pvParameters)
     switch (state)
     {
     case States::IDLE:
-      if(millis() > 8000){
+      if(!digitalRead(PinDefs.ARM)){
         state = States::ARMED;
       }
       break;
@@ -230,8 +236,14 @@ void LogLoop(void *pvParameters)
 
       float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
 
-      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 500, 5, motor_frame_offset + 20, motor_frame_offset + motor_travel_length - 20); // TODO: Add
+      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
+
+      if(digitalRead(PinDefs.ARM)){
+        state = States::IDLE;
+      }
+      
       break;
+      
     }
 
     case States::IGNITION:
@@ -320,6 +332,8 @@ void PrintLoop(void *pvParameters)
         Serial1.print("\t");
         Serial1.print(current);
         Serial1.print("\t");
+        Serial1.print(torque, 3);
+        Serial1.print("\t");
         Serial1.print(primaryIgniterConnected);
         Serial1.print("\t");
         Serial1.print(backupIgniterConnected);
@@ -352,7 +366,7 @@ void FlushLoop(void *pvParameters)
     logging.flush();
     if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
     {
-      Serial1.println("ms\tmode\tx\t\ty\t\tz\t\ttheta\tp\tt\tmode\tpos\tvel\tI\tPI\tBI");
+      Serial1.println("ms\tmode\tx\t\ty\t\tz\t\ttheta\tp\tt\tmode\tpos\tvel\tI\tT\tPI\tBI");
       xSemaphoreGive(xSerialMutex);
     }
       vTaskDelay(4000); // 2000 ms = 0.5 Hz
@@ -365,6 +379,8 @@ void setup() {
   while (!Serial1){
     statusIndicator.solid(StatusIndicator::RED);
   }
+
+  // Ejection testing - REMOVE!!
 
   Wire.setSDA(PinDefs.SDA);
   Wire.setSCL(PinDefs.SCL);
@@ -437,8 +453,8 @@ void setup() {
   logging.flush();
 
   //uncomment to measure motor travel distance after power cycle
-  motor_frame_offset = MotorRoutines::runToEnd(moteus1, -50, 3);
-  Serial1.println("Motor frame offset: " + String(motor_frame_offset));
+  // motor_frame_offset = MotorRoutines::runToEnd(moteus1, -20, 1);
+  // Serial1.println("Motor frame offset: " + String(motor_frame_offset));
 
   // for (int i = 0; i < 400; i+=50)
   // {

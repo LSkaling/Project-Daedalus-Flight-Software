@@ -34,6 +34,8 @@ public:
     const int SDA;
     const int SCL;
 
+    const int ARM;
+
     void setupPins();
 };
 

@@ -150,7 +150,7 @@ void MotorRoutines::moveToPositionBlocking(Moteus &motor, float position, float 
     }
 }
 
-void MotorRoutines::moveToPosition(Moteus &motor, float position, float velocity, float current, float minPos, float maxPos){
+void MotorRoutines::moveToPosition(Moteus &motor, float position, float velocity, float torque, float accel, float minPos, float maxPos){
 
     if(position < minPos){
         position = minPos;
@@ -165,8 +165,10 @@ void MotorRoutines::moveToPosition(Moteus &motor, float position, float velocity
     Moteus::PositionMode::Format format;
     format.accel_limit = Moteus::kFloat;
     format.velocity_limit = Moteus::kFloat;
-    cmd.accel_limit = 800;
+    format.maximum_torque = Moteus::kFloat;
+    cmd.accel_limit = accel;
     cmd.velocity_limit = velocity;
+    cmd.maximum_torque = torque;
 
 
     motor.SetPosition(cmd, &format);

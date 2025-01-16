@@ -16,7 +16,7 @@ public:
     static float measureMovingResistance(Moteus &motor, float velocity); //TODO: How to return (float, float) array?
     static void testImpact(Moteus &motor); //TODO: What's VFOC mode, and should i Use it instead of current?
     static void moveToPositionBlocking(Moteus &motor, float position, float velocity, float current);
-    static void moveToPosition(Moteus &motor, float position, float velocity, float current, float minPos, float maxPos);
+    static void moveToPosition(Moteus &motor, float position, float velocity, float torque, float accel, float minPos, float maxPos);
 };
 
 #endif

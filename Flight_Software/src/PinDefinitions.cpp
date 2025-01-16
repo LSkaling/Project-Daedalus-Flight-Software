@@ -27,7 +27,9 @@ PinDefinitions::PinDefinitions():
     MCP_INT(PA8),
 
     SDA(PB9),
-    SCL(PB8)
+    SCL(PB8),
+
+    ARM(PB13)
 {
     // Constructor
 }
@@ -56,6 +58,8 @@ void PinDefinitions::setupPins() {
 
     pinMode(MCP_CS, OUTPUT);
     pinMode(MCP_INT, INPUT);
+
+    pinMode(SDA, INPUT_PULLUP);
 
 }
 
