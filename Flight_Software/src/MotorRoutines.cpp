@@ -151,6 +151,13 @@ void MotorRoutines::moveToPositionBlocking(Moteus &motor, float position, float 
 }
 
 void MotorRoutines::moveToPosition(Moteus &motor, float position, float velocity, float current, float minPos, float maxPos){
+
+    if(position < minPos){
+        position = minPos;
+    } else if(position > maxPos){
+        position = maxPos;
+    }
+
     Moteus::PositionMode::Command cmd;
     cmd.position = position;
     cmd.velocity = NaN;

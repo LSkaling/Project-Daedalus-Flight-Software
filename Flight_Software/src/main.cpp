@@ -20,8 +20,9 @@
 const bool SIMULATION_MODE = false;
 
 const float movement_ratio = 1.4089; //Converts from motor frame to weight frame
-float motor_frame_offset = -230.10;
+float motor_frame_offset = -301.90;
 float balance_frame_offset = 350;
+float motor_travel_length = 446.83; // in motor frame
 
 SemaphoreHandle_t xSerialMutex;
 
@@ -30,8 +31,8 @@ float x, y, z, x_hg, y_hg, z_hg;
 float theta;
 float theta_dot;
 
-float alpha = 0.1;       // Smoothing factor (adjust based on your needs)
-float filteredTheta = 0; // Initialize the filtered value
+float alpha = 0.02;       // Smoothing factor (adjust based on your needs)
+float filteredTheta = 90; // Initialize the filtered value
 
 float altitude;
 float vertical_velocity;
@@ -229,7 +230,7 @@ void LogLoop(void *pvParameters)
 
       float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
 
-      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 500, 5, 0, 0); //TODO: Add
+      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 500, 5, motor_frame_offset + 20, motor_frame_offset + motor_travel_length - 20); // TODO: Add
       break;
     }
 
@@ -436,7 +437,8 @@ void setup() {
   logging.flush();
 
   //uncomment to measure motor travel distance after power cycle
-  //motor_frame_offset = MotorRoutines::runToEnd(moteus1, -50, 3);
+  motor_frame_offset = MotorRoutines::runToEnd(moteus1, -50, 3);
+  Serial1.println("Motor frame offset: " + String(motor_frame_offset));
 
   // for (int i = 0; i < 400; i+=50)
   // {
@@ -456,13 +458,14 @@ void setup() {
 
   // MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(-50), 50, 3);
 
-  //MotorRoutines::runToEnd(moteus1, 5, 0.5);
-  //motor_travel_distance = MotorRoutines::measureTravelDistance(moteus1, 50, 3);
+  // //Calibrate motor distance
+  // MotorRoutines::runToEnd(moteus1, 5, 0.5);
+  // float motor_travel_distance = MotorRoutines::measureTravelDistance(moteus1, 50, 3);
+  // Serial1.println("Motor travel distance: " + String(motor_travel_distance));
 
   // Moteus::Result lastResult = moteus1.last_result();
   // // mode = lastResult.values.mode; //TODO: how to get value associated with enum?
   // position = lastResult.values.position;
-  // motor_offset = position;
 
   // // run motor to center
   // float center_position = motor_offset + motor_travel_distance / 2;
