@@ -7,6 +7,7 @@ class Igniter {
         void arm();
         void disarm();
         void fire();
+        void stop();
         bool isArmed();
         bool isFiring();
         bool igniterCheck();

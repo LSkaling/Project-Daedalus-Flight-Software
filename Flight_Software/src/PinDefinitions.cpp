@@ -59,7 +59,7 @@ void PinDefinitions::setupPins() {
     pinMode(MCP_CS, OUTPUT);
     pinMode(MCP_INT, INPUT);
 
-    pinMode(SDA, INPUT_PULLUP);
+    pinMode(ARM, INPUT_PULLUP);
 
 }
 

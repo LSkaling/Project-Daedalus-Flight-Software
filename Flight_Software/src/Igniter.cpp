@@ -23,6 +23,11 @@ void Igniter::fire() {
   }
 }
 
+void Igniter::stop() {
+  firing = false;
+  digitalWrite(igniterPin, LOW);
+}
+
 bool Igniter::isArmed() {
   return armed;
 }

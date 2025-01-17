@@ -376,11 +376,60 @@ void FlushLoop(void *pvParameters)
 void setup() {
   Serial1.begin(230400);
 
-  while (!Serial1){
-    statusIndicator.solid(StatusIndicator::RED);
+  pinMode(PinDefs.ARM, INPUT_PULLUP);
+  pinMode(PinDefs.IGNITER_0, OUTPUT);
+
+  // while (!Serial1){
+  //   statusIndicator.solid(StatusIndicator::RED);
+  // }
+
+  delay(2000);
+
+  while(digitalRead(PinDefs.ARM) == LOW){
+    statusIndicator.solid(StatusIndicator::ORANGE);
+    delay(500);
   }
 
   // Ejection testing - REMOVE!!
+  while (digitalRead(PinDefs.ARM) == HIGH)
+  {
+    statusIndicator.solid(StatusIndicator::BLUE);
+    Serial1.println("Waiting for arming");
+    delay(500);
+  }
+
+  Serial1.println("Armed");
+
+  //primaryIgniter.arm();
+
+  int start_time = millis();
+
+
+  statusIndicator.solid(StatusIndicator::RED);
+  Serial1.println("Countdown");
+  delay(10000);
+
+  if (digitalRead(PinDefs.ARM) == HIGH){
+    //primaryIgniter.disarm();
+    statusIndicator.solid(StatusIndicator::ORANGE);
+    Serial1.println("Canceled");
+    while (true){}
+  }
+
+  Serial1.println("Firing");
+
+  //primaryIgniter.fire();
+
+  digitalWrite(PinDefs.IGNITER_0, HIGH);
+  delay(1000);
+  digitalWrite(PinDefs.IGNITER_0, LOW);
+  //primaryIgniter.stop();
+
+  while (true){
+    Serial1.println("Test concluded");
+    statusIndicator.solid(StatusIndicator::GREEN);
+    delay(1000);
+  }
 
   Wire.setSDA(PinDefs.SDA);
   Wire.setSCL(PinDefs.SCL);
