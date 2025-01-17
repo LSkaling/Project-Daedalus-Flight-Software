@@ -9,7 +9,6 @@ public:
     Logging(bool debug, bool logToSD, int SD_CS);
 
     void log(const char* message);
-    void log(const char* names[], const float values[], size_t size);
 
     bool begin(const char *names[], size_t size);
 

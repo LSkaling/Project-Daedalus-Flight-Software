@@ -84,30 +84,7 @@ void Logging::log(const char* message)
     }
 }
 
-void Logging::log(const char* names[], const float values[], size_t size)
-{
-    char buffer[256]; // Pre-allocated buffer for printing
-    for (size_t i = 0; i < size; i++)
-    {
-        snprintf(buffer, sizeof(buffer), "%s: %.2f,", names[i], values[i]);
-        if (debug)
-        {
-            Serial1.print(buffer);
-        }
-        if (logToSD && dataFile)
-        {
-            dataFile.print(buffer);
-        }
-    }
-    if (debug)
-    {
-        Serial1.println();
-    }
-    if (logToSD && dataFile)
-    {
-        dataFile.println();
-    }
-}
+
 
 void Logging::flush()
 {

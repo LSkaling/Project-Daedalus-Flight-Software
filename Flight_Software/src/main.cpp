@@ -7,7 +7,6 @@
 #include <ACAN2517FD.h>
 #include <Moteus.h>
 #include <MotorRoutines.h>
-#include <Buzzer.h>
 #include <PinDefinitions.h>
 #include <StatusIndicator.h>
 #include <Logging.h>
@@ -26,7 +25,8 @@ float motor_travel_length = 446.83; // in motor frame
 
 SemaphoreHandle_t xSerialMutex;
 
-float x, y, z, x_hg, y_hg, z_hg;
+float x, y, z;
+//float x_hg, y_hg, z_hg;
 
 float theta;
 float theta_dot;
@@ -34,14 +34,13 @@ float theta_dot;
 float alpha = 0.5;       // Smoothing factor (adjust based on your needs)
 float filteredTheta = 90; // Initialize the filtered value
 
-float altitude;
-float vertical_velocity;
-
 uint32_t mode;
 float position, velocity, current, torque;
 
 float pressure;
 float temperature;
+float altitude;
+float vertical_velocity;
 
 bool primaryIgniterConnected = false;
 bool backupIgniterConnected = false;
@@ -63,13 +62,13 @@ const char* logVariables[] = {
 
 size_t logSize = sizeof(logVariables) / sizeof(logVariables[0]);
 
-Logging logging(true, false, PinDefs.SD_CS);
+Logging logging(false, true, PinDefs.SD_CS);
 ACAN2517FD can (PinDefs.MCP_CS, SPI, PinDefs.MCP_INT);
 File dataFile;
 Adxl adxl345 = Adxl(0x1D, ADXL345);
-Adxl adxl375 = Adxl(0x53, ADXL375);
+//Adxl adxl375 = Adxl(0x53, ADXL375);
 Lps22 lps22 = Lps22(0x5C);
-Clutch clutch = Clutch(PinDefs.SERVO, 0, 180); //TODO: is this in deg?
+Clutch clutch = Clutch(PinDefs.SERVO, 120, 50);
 Igniter primaryIgniter = Igniter(PinDefs.IGNITER_0, PinDefs.IGNITER_SENSE_0);
 Igniter backupIgniter = Igniter(PinDefs.IGNITER_1, PinDefs.IGNITER_SENSE_1);
 StatusIndicator statusIndicator = StatusIndicator(PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
@@ -133,11 +132,11 @@ float balance_frame_to_motor_frame(float pos){
   return weight_frame_to_motor_frame(pos_offset);
 }
 
-float calculateAltitude(float pressure, float temperature)
-{
-  float altitude = (1 - pow((pressure / 1013.25), 0.1903)) * 145366.45;
-  return altitude;
-}
+// float calculateAltitude(float pressure, float temperature) //1Pa = 
+// {
+//   float altitude = (1 - pow((pressure / 1013.25), 0.1903)) * 145366.45;
+//   return altitude;
+// }
 
 // Fast Loop (Read sensors, Write motor)
 void FastLoop(void *pvParameters)
@@ -164,11 +163,11 @@ void FastLoop(void *pvParameters)
         splitString(data, ',', dataParts, 12);
 
         x = dataParts[0].toFloat();
-        x_hg = dataParts[1].toFloat();
+        // x_hg = dataParts[1].toFloat();
         y = dataParts[2].toFloat();
-        y_hg = dataParts[3].toFloat();
+        // y_hg = dataParts[3].toFloat();
         z = dataParts[4].toFloat();
-        z_hg = dataParts[5].toFloat();
+        // z_hg = dataParts[5].toFloat();
         pressure = dataParts[6].toFloat();
         temperature = dataParts[7].toFloat();
         mode = dataParts[8].toInt();
@@ -182,10 +181,14 @@ void FastLoop(void *pvParameters)
     else
     {
       adxl345.readAccelerometer(&x, &y, &z);
-      adxl375.readAccelerometer(&x_hg, &y_hg, &z_hg);
+      //adxl375.readAccelerometer(&x_hg, &y_hg, &z_hg);
 
       lps22.readPressure(&pressure);
       lps22.readTemperature(&temperature);
+
+      // float new_altitude = calculateAltitude(pressure, temperature);
+      // vertical_velocity = (new_altitude - altitude) / 0.02;
+      // altitude = new_altitude;
 
       Moteus::Result lastResult = moteus1.last_result();
       mode = static_cast<uint32_t>(lastResult.values.mode); // TODO: how to get value associated with enum?
@@ -214,6 +217,8 @@ void LogLoop(void *pvParameters)
     switch (state)
     {
     case States::IDLE:
+      clutch.disengage();
+
       if(!digitalRead(PinDefs.ARM)){
         state = States::ARMED;
       }
@@ -221,22 +226,9 @@ void LogLoop(void *pvParameters)
     
     case States::ARMED:
     {
+      clutch.begin();
+      clutch.engage();
 
-      float new_theta = calculateAngle(x, y, z);
-      theta_dot = (new_theta - theta) / 0.02;
-      theta = new_theta;
-
-      filteredTheta = alpha * theta + (1 - alpha) * filteredTheta;
-
-      float theta_error = -filteredTheta + 90;
-
-      // float new_altitude = calculateAltitude(pressure, temperature);
-      // vertical_velocity = (new_altitude - altitude) / 0.02;
-      // altitude = new_altitude;
-
-      float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
-
-      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
 
       if(digitalRead(PinDefs.ARM)){
         state = States::IDLE;
@@ -259,20 +251,21 @@ void LogLoop(void *pvParameters)
       break;
 
     case States::BELLYFLOP:
-      // float new_theta = calculateAngle(x, y, z);
-      // theta_dot = (new_theta - theta) / 0.02;
-      // theta = new_theta;
+    {
+      float new_theta = calculateAngle(x, y, z);
+      theta_dot = (new_theta - theta) / 0.02;
+      theta = new_theta;
 
-      // float new_altitude = calculateAltitude(pressure, temperature);
-      // vertical_velocity = (new_altitude - altitude) / 0.02;
-      // altitude = new_altitude;
+      filteredTheta = alpha * theta + (1 - alpha) * filteredTheta;
 
-      // float weight_position = theta * K_P + theta_dot * K_D; //TODO: Add scaling for acceleration
+      float theta_error = -filteredTheta + 90;
 
-      //MotorRoutines::moveToPosition(moteus1, 0, 0.1, 0.1); //TODO: Add
+      float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
 
+      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
 
       break;
+    }
 
     case States::CHUTE:
       /* code */
@@ -295,11 +288,11 @@ void PrintLoop(void *pvParameters)
 {
   while (true)
   {
-    // if(millis() % 2000 < 1000){
-    //   statusIndicator.solid(StatusIndicator::RED);
-    // } else{
-    //   statusIndicator.solid(StatusIndicator::BLUE);
-    // }
+    if(millis() % 2000 < 1000){
+      statusIndicator.solid(StatusIndicator::RED);
+    } else{
+      statusIndicator.solid(StatusIndicator::BLUE);
+    }
     if(xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE){
 
         Serial1.print(millis());
@@ -307,16 +300,16 @@ void PrintLoop(void *pvParameters)
         Serial1.print(stateToString(state));
         Serial1.print("\t");
         Serial1.print(x, 3);
-        Serial1.print("\t");
-        Serial1.print(x_hg, 3);
+        // Serial1.print("\t");
+        // Serial1.print(x_hg, 3);
         Serial1.print("\t");
         Serial1.print(y, 3);
-        Serial1.print("\t");
-        Serial1.print(y_hg, 3);
+        // Serial1.print("\t");
+        // Serial1.print(y_hg, 3);
         Serial1.print("\t");
         Serial1.print(z, 3);
-        Serial1.print("\t");
-        Serial1.print(z_hg, 3);
+        // Serial1.print("\t");
+        // Serial1.print(z_hg, 3);
         Serial1.print("\t");
         Serial1.print(theta, 3);
         Serial1.print("\t");
@@ -334,9 +327,7 @@ void PrintLoop(void *pvParameters)
         Serial1.print("\t");
         Serial1.print(torque, 3);
         Serial1.print("\t");
-        Serial1.print(primaryIgniterConnected);
-        Serial1.print("\t");
-        Serial1.print(backupIgniterConnected);
+        Serial1.print(altitude);
 
         // Serial1.print("\t");
         // Serial1.print(xPortGetFreeHeapSize());
@@ -349,6 +340,11 @@ void PrintLoop(void *pvParameters)
         // Serial1.print("\t");
         // Serial1.print(uxTaskGetStackHighWaterMark(FlushLoopHandle));
         Serial1.println();
+
+
+        //convert to string to log message
+        const String logMessage = String(millis()) + "," + String(x) + "," + String(y) + "," + String(z) + "," + String(pressure) + "," + String(temperature) + "," + String(mode) + "," + String(motor_frame_to_weight_frame(position)) + "," + String(velocity) + "," + String(current) + "," + String(torque) + "," + String(altitude);
+        logging.log(logMessage.c_str());
 
 
 
@@ -366,7 +362,7 @@ void FlushLoop(void *pvParameters)
     logging.flush();
     if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
     {
-      Serial1.println("ms\tmode\tx\t\ty\t\tz\t\ttheta\tp\tt\tmode\tpos\tvel\tI\tT\tPI\tBI");
+      Serial1.println("ms\tmode\tx\ty\tz\ttheta\tp\tt\tmode\tpos\tvel\tI\tT\talt");
       xSemaphoreGive(xSerialMutex);
     }
       vTaskDelay(4000); // 2000 ms = 0.5 Hz
@@ -379,56 +375,8 @@ void setup() {
   pinMode(PinDefs.ARM, INPUT_PULLUP);
   pinMode(PinDefs.IGNITER_0, OUTPUT);
 
-  // while (!Serial1){
-  //   statusIndicator.solid(StatusIndicator::RED);
-  // }
-
-  delay(2000);
-
-  while(digitalRead(PinDefs.ARM) == LOW){
-    statusIndicator.solid(StatusIndicator::ORANGE);
-    delay(500);
-  }
-
-  // Ejection testing - REMOVE!!
-  while (digitalRead(PinDefs.ARM) == HIGH)
-  {
-    statusIndicator.solid(StatusIndicator::BLUE);
-    Serial1.println("Waiting for arming");
-    delay(500);
-  }
-
-  Serial1.println("Armed");
-
-  //primaryIgniter.arm();
-
-  int start_time = millis();
-
-
-  statusIndicator.solid(StatusIndicator::RED);
-  Serial1.println("Countdown");
-  delay(10000);
-
-  if (digitalRead(PinDefs.ARM) == HIGH){
-    //primaryIgniter.disarm();
-    statusIndicator.solid(StatusIndicator::ORANGE);
-    Serial1.println("Canceled");
-    while (true){}
-  }
-
-  Serial1.println("Firing");
-
-  //primaryIgniter.fire();
-
-  digitalWrite(PinDefs.IGNITER_0, HIGH);
-  delay(1000);
-  digitalWrite(PinDefs.IGNITER_0, LOW);
-  //primaryIgniter.stop();
-
-  while (true){
-    Serial1.println("Test concluded");
-    statusIndicator.solid(StatusIndicator::GREEN);
-    delay(1000);
+  while (!Serial1){
+    statusIndicator.solid(StatusIndicator::RED);
   }
 
   Wire.setSDA(PinDefs.SDA);
@@ -454,8 +402,6 @@ void setup() {
     }
   }
 
-  statusIndicator.off();
-
   SPI.setMOSI(PinDefs.SDI);
   SPI.setMISO(PinDefs.SDO);
   SPI.setSCLK(PinDefs.SCK); 
@@ -473,7 +419,7 @@ void setup() {
 
   while (errorCode != 0) {
     char buffer[128];
-    snprintf(buffer, sizeof(buffer), "CAN initialization failed with error code: %ld", errorCode); //TODO: Doesn't work
+    snprintf(buffer, sizeof(buffer), "CAN err: %ld", errorCode); //TODO: Doesn't work
     logging.log(buffer);
     delay(1000);
   }      
@@ -482,20 +428,19 @@ void setup() {
   // a stop command to each.
   moteus1.SetStop();
 
-  clutch.begin();
 
   while (!adxl345.begin()) {
-    logging.log("Error connecting to ADXL345 sensor");
+    logging.log("Err A345");
     delay(1000);
   }
 
-  while (!adxl375.begin()) {
-    logging.log("Error connecting to ADXL375 sensor");
-    delay(1000);
-  }
+  // while (!adxl375.begin()) {
+  //   logging.log("ErrA375");
+  //   delay(1000);
+  // }
 
   while (!lps22.begin()) {
-    logging.log("Error connecting to LPS22 sensor");
+    logging.log("ErrLPS22");
     delay(1000);
   }
 
@@ -542,8 +487,8 @@ void setup() {
   // MotorRoutines::moveToPositionBlocking(moteus1, 100, 50, 15);
   // delay(5000);
 
-  Serial1.println("Motor location:");
-  Serial1.println(moteus1.last_result().values.position);
+  // Serial1.println("Motor location:");
+  // Serial1.println(moteus1.last_result().values.position);
 
   clutch.disengage();
 
@@ -559,27 +504,24 @@ void setup() {
 
   if (xTaskCreate(FastLoop, "FastLoop", 256, NULL, 3, &FastLoopHandle) != pdPASS)
   {
-    Serial1.println("FastLoop task creation failed!");
+    Serial1.println("ErrX");
     while (1);
   }
   if (xTaskCreate(LogLoop, "LogLoop", 128, NULL, 2, &LogLoopHandle) != pdPASS)
   {
-    Serial1.println("LogLoop task creation failed!");
+    Serial1.println("ErrX");
     while (1);
   }
   if (xTaskCreate(PrintLoop, "PrintLoop", 128, NULL, 1, &PrintLoopHandle) != pdPASS)
   {
-    Serial1.println("PrintLoop task creation failed!");
+    Serial1.println("ErrX");
     while (1);
   }
   if (xTaskCreate(FlushLoop, "FlushLoop", 64, NULL, 1, &FlushLoopHandle) != pdPASS)
   {
-    Serial1.println("FlushLoop task creation failed!");
+    Serial1.println("ErrX");
     while (1);
   }
-
-  Serial1.print("Free heap after tasks: ");
-  Serial1.println(xPortGetFreeHeapSize());
 
   statusIndicator.solid(StatusIndicator::GREEN);
 
