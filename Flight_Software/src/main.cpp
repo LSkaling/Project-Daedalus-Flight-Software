@@ -18,7 +18,7 @@
 
 //#define configCHECK_FOR_STACK_OVERFLOW 2
 
-const bool SIMULATION_MODE = false;
+const bool SIMULATION_MODE = true;
 
 const float movement_ratio = 1.4089; //Converts from motor frame to weight frame
 float motor_frame_offset = -435.11;
@@ -260,10 +260,10 @@ void LogLoop(void *pvParameters)
       statusIndicator.solid(StatusIndicator::BLUE);
       if (!digitalRead(PinDefs.ARM))
       {
-        // state = States::ARMED;
-        // prev_pressure = pressure;
-        // two_prev_pressure = pressure;
-        state = States::BELLYFLOP;
+        state = States::ARMED;
+        prev_pressure = pressure;
+        two_prev_pressure = pressure;
+        // state = States::BELLYFLOP;
       }
       break;
     }
