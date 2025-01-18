@@ -16,14 +16,17 @@
 #include <Clutch.h>
 //#include <i2c_scanner.h>
 
+//#define configCHECK_FOR_STACK_OVERFLOW 2
+
 const bool SIMULATION_MODE = false;
 
 const float movement_ratio = 1.4089; //Converts from motor frame to weight frame
-float motor_frame_offset = -213.88;
+float motor_frame_offset = -213.66;
 float balance_frame_offset = 350;
 float motor_travel_length = 446.83; // in motor frame
 
 SemaphoreHandle_t xSerialMutex;
+SemaphoreHandle_t xMoteusMutex;
 
 float x, y, z;
 //float x_hg, y_hg, z_hg;
@@ -52,6 +55,8 @@ float two_prev_pressure = 0;
 
 float pressure_at_liftoff = 0;
 int millis_at_liftoff = 0;
+
+bool alternateMotorCommand = true;
 
 int millis_at_chute_transition = 0;
 
@@ -103,6 +108,14 @@ TaskHandle_t FastLoopHandle;
 TaskHandle_t LogLoopHandle;
 TaskHandle_t PrintLoopHandle;
 TaskHandle_t FlushLoopHandle;
+
+// void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+// {
+//   Serial1.print("Stack overflow in task: ");
+//   Serial1.println(pcTaskName);
+//   while (1)
+//     ; // Halt system
+// }
 
 void splitString(String data, char delimiter, String parts[], int maxParts)
 {
@@ -204,23 +217,28 @@ void FastLoop(void *pvParameters)
       // float new_altitude = calculateAltitude(pressure, temperature);
       // vertical_velocity = (new_altitude - altitude) / 0.02;
       // altitude = new_altitude;
-
-      Moteus::Result lastResult = moteus1.last_result();
-      mode = static_cast<uint32_t>(lastResult.values.mode); // TODO: how to get value associated with enum?
-      velocity = lastResult.values.velocity;
-      position = lastResult.values.position;
-      current = lastResult.values.q_current;
-      torque = lastResult.values.torque;
-
-      theta = calculateAngle(x, y, z);
-
-      if(mode == 11){
-        moteus1.SetStop();
-      }
-
    }
 
-    vTaskDelay(20); // Run at 50hz
+   if (xSemaphoreTake(xMoteusMutex, portMAX_DELAY) == pdTRUE)
+   {
+     Moteus::Result lastResult = moteus1.last_result();
+     mode = static_cast<uint32_t>(lastResult.values.mode);
+     velocity = lastResult.values.velocity;
+     position = lastResult.values.position;
+     current = lastResult.values.q_current;
+     torque = lastResult.values.torque;
+
+     if (mode == 11)
+     {
+       Serial1.println("Mode 11");
+       moteus1.SetStop();
+     }
+
+     xSemaphoreGive(xMoteusMutex);
+   }
+   theta = calculateAngle(x, y, z);
+
+   vTaskDelay(20); // Run at 50hz
   }
 }
 
@@ -332,8 +350,16 @@ void LogLoop(void *pvParameters)
       float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
 
       //float weight_position = 0;
+      // if(alternateMotorCommand){
+        if (xSemaphoreTake(xMoteusMutex, portMAX_DELAY) == pdTRUE)
+        {
+          MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
+          xSemaphoreGive(xMoteusMutex);
+        }
+      // }
 
-      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
+      // alternateMotorCommand = !alternateMotorCommand;
+
 
       // if (pressure_at_liftoff - pressure < 20)
       // {
@@ -367,7 +393,7 @@ void LogLoop(void *pvParameters)
       /* code */
       break;
     }
-    vTaskDelay(65); // 50 ms = 20 Hz
+    vTaskDelay(50); // 50 ms = 20 Hz
   }
 }
 
@@ -461,6 +487,11 @@ void FlushLoop(void *pvParameters)
     if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
     {
       Serial1.println("ms\tmode\tx\ty\tz\ttheta\tp\tt\tmode\tpos\tvel\tI\tT\talt");
+      Serial1.print("FastLoop stack high watermark: ");
+      Serial1.println(uxTaskGetStackHighWaterMark(FastLoopHandle));
+
+      Serial1.print("LogLoop stack high watermark: ");
+      Serial1.println(uxTaskGetStackHighWaterMark(LogLoopHandle));
       xSemaphoreGive(xSerialMutex);
     }
       vTaskDelay(2000); // 2000 ms = 0.5 Hz
@@ -547,8 +578,8 @@ void setup() {
 
   logging.flush();
 
-  //uncomment to measure motor travel distance after power cycle
-  // motor_frame_offset = MotorRoutines::runToEnd(moteus1, -20, 1);
+//  uncomment to measure motor travel distance after power cycle
+  // motor_frame_offset = MotorRoutines::runToEnd(moteus1, -20, 2);
   // Serial1.println("Motor frame offset: " + String(motor_frame_offset));
 
   // for (int i = 0; i < 400; i+=50)
@@ -600,6 +631,7 @@ void setup() {
 
   // Create tasks
   xSerialMutex = xSemaphoreCreateMutex();
+  xMoteusMutex = xSemaphoreCreateMutex();
   Serial1.print("Free heap before tasks: ");
   Serial1.println(xPortGetFreeHeapSize());
 
@@ -608,7 +640,7 @@ void setup() {
     Serial1.println("ErrX");
     while (1);
   }
-  if (xTaskCreate(LogLoop, "LogLoop", 128, NULL, 2, &LogLoopHandle) != pdPASS)
+  if (xTaskCreate(LogLoop, "LogLoop", 384, NULL, 2, &LogLoopHandle) != pdPASS)
   {
     Serial1.println("ErrX");
     while (1);
