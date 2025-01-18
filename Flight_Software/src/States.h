@@ -3,14 +3,13 @@
 
 enum States
 {
+    INTEGRATING,
     IDLE,
     ARMED,
-    IGNITION,
-    COAST,
+    FLIGHT,
     APOGEE,
     BELLYFLOP,
     CHUTE,
-    IMPACT,
     LANDED
 };
 

@@ -42,8 +42,20 @@ float temperature;
 float altitude;
 float vertical_velocity;
 
-bool primaryIgniterConnected = false;
-bool backupIgniterConnected = false;
+float pressure_offset;
+
+float prev_pressure = 0;
+float two_prev_pressure = 0;
+
+float pressure_at_liftoff = 0;
+int millis_at_liftoff = 0;
+
+int millis_at_chute_transition = 0;
+
+//largest value at start
+float apogee_pressure = 20000;
+
+int last_pressure_check_millis = 0;
 
 const char* logVariables[] = {
     "Time",
@@ -132,11 +144,10 @@ float balance_frame_to_motor_frame(float pos){
   return weight_frame_to_motor_frame(pos_offset);
 }
 
-// float calculateAltitude(float pressure, float temperature) //1Pa = 
-// {
-//   float altitude = (1 - pow((pressure / 1013.25), 0.1903)) * 145366.45;
-//   return altitude;
-// }
+float calculateAltitude(float pressure) //1Pa = 
+{
+  return (pressure - pressure_offset) / 12.01316023475;
+}
 
 // Fast Loop (Read sensors, Write motor)
 void FastLoop(void *pvParameters)
@@ -216,70 +227,122 @@ void LogLoop(void *pvParameters)
   {
     switch (state)
     {
-    case States::IDLE:
-      clutch.disengage();
-
-      if(!digitalRead(PinDefs.ARM)){
-        state = States::ARMED;
+      case States::INTEGRATING:
+      {
+        statusIndicator.solid(StatusIndicator::ORANGE);
+        clutch.disengage();
+        if (digitalRead(PinDefs.ARM))
+        {
+          state = States::IDLE;
+        }
       }
-      break;
-    
-    case States::ARMED:
-    {
-      clutch.begin();
-      clutch.engage();
 
-
-      if(digitalRead(PinDefs.ARM)){
-        state = States::IDLE;
+      case States::IDLE:
+      {
+        statusIndicator.solid(StatusIndicator::BLUE);
+        if(!digitalRead(PinDefs.ARM)){
+          state = States::ARMED;
+          prev_pressure = pressure;
+          two_prev_pressure = pressure;
+        }
+        break;
       }
       
-      break;
-      
-    }
+      case States::ARMED:
+      {
+        statusIndicator.solid(StatusIndicator::GREEN);
+        clutch.begin();
+        clutch.engage();
 
-    case States::IGNITION:
-      /* code */
-      break;
+        //check every 10 seconds:
+        if(millis() - last_pressure_check_millis > 10000){
+          last_pressure_check_millis = millis();
+          two_prev_pressure = prev_pressure;
+          prev_pressure = pressure;
+        }
 
-    case States::COAST:
-      /* code */
-      break;
+        float pressure_change = two_prev_pressure - pressure;
 
-    case States::APOGEE:
-      /* code */
-      break;
 
-    case States::BELLYFLOP:
-    {
-      float new_theta = calculateAngle(x, y, z);
-      theta_dot = (new_theta - theta) / 0.02;
-      theta = new_theta;
+        if(digitalRead(PinDefs.ARM)){
+          state = States::IDLE;
+        }
 
-      filteredTheta = alpha * theta + (1 - alpha) * filteredTheta;
+        if (y > 6 || (pressure_change > 1 && y > 2) || pressure_change > 2)
+        {
+          state = States::FLIGHT;
+          pressure_at_liftoff = two_prev_pressure;
+          millis_at_liftoff = millis();
+        }
 
-      float theta_error = -filteredTheta + 90;
+        break;
+        
+      }
+      case States::FLIGHT:
+      {
+        statusIndicator.solid(StatusIndicator::RED);
 
-      float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
+        if(pressure < apogee_pressure){
+          apogee_pressure = pressure;
+        }
 
-      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
 
-      break;
-    }
+        if(millis() - millis_at_liftoff > 15000 || pressure - apogee_pressure > 1 && millis() - millis_at_liftoff > 10000){
+          state = States::APOGEE;
+        }
+        break;
+      }
 
-    case States::CHUTE:
-      /* code */
-      break;
+      case States::APOGEE:
+      {
+        clutch.disengage();
+        MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(0), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
+        
+        if(mode == 10){
+          state = States::BELLYFLOP;
+        }else{
+          state = States::CHUTE;
+        }
 
-    case States::IMPACT:
-      /* code */
-      break;
+        break;
+      }
 
-    case States::LANDED:
-      /* code */
-      break;
-    }
+      case States::BELLYFLOP:
+      {
+        float new_theta = calculateAngle(x, y, z);
+        theta_dot = (new_theta - theta) / 0.02;
+        theta = new_theta;
+
+        filteredTheta = alpha * theta + (1 - alpha) * filteredTheta;
+
+        float theta_error = -filteredTheta + 90;
+
+        float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
+
+        MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
+
+        if (pressure_at_liftoff - pressure < 20){
+          state = States::CHUTE;
+          millis_at_chute_transition = millis();
+        }
+
+        break;
+      }
+
+      case States::CHUTE:
+      {
+        if(millis() - millis_at_chute_transition < 1000){
+          digitalWrite(PinDefs.IGNITER_0, HIGH);
+        }
+        else if (millis() - millis_at_chute_transition < 2000){
+          digitalWrite(PinDefs.IGNITER_0, LOW);
+          digitalWrite(PinDefs.IGNITER_1, HIGH);
+        }
+        digitalWrite(PinDefs.IGNITER_1, LOW);
+        break;
+      }
     vTaskDelay(50); // 50 ms = 20 Hz
+  }
   }
 }
 
