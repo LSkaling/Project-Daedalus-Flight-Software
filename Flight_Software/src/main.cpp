@@ -82,7 +82,7 @@ const char* logVariables[] = {
 
 size_t logSize = sizeof(logVariables) / sizeof(logVariables[0]);
 
-Logging logging(false, true, PinDefs.SD_CS);
+Logging logging(false, false, PinDefs.SD_CS);
 ACAN2517FD can (PinDefs.MCP_CS, SPI, PinDefs.MCP_INT);
 File dataFile;
 Adxl adxl345 = Adxl(0x1D, ADXL345);
@@ -192,16 +192,12 @@ void FastLoop(void *pvParameters)
 
         x = dataParts[0].toFloat();
         // x_hg = dataParts[1].toFloat();
-        y = dataParts[2].toFloat();
+        y = dataParts[1].toFloat();
         // y_hg = dataParts[3].toFloat();
-        z = dataParts[4].toFloat();
+        z = dataParts[2].toFloat();
         // z_hg = dataParts[5].toFloat();
-        pressure = dataParts[6].toFloat();
-        temperature = dataParts[7].toFloat();
-        mode = dataParts[8].toInt();
-        position = dataParts[9].toFloat();
-        velocity = dataParts[10].toFloat();
-        current = dataParts[11].toFloat();
+        pressure = dataParts[3].toFloat();
+        temperature = dataParts[4].toFloat();
 
         xSemaphoreGive(xSerialMutex);
       }
@@ -456,6 +452,7 @@ void PrintLoop(void *pvParameters)
         Serial1.println();
 
         //convert to string to log message
+
         const String logMessage = String(millis()) + "\t" +
                                   stateToString(state) + "\t" +
                                   String(x) + "\t" +
@@ -471,6 +468,7 @@ void PrintLoop(void *pvParameters)
                                   String(torque) + "\t" +
                                   String(altitude);
         logging.log(logMessage.c_str());
+        
 
         xSemaphoreGive(xSerialMutex);
     }
