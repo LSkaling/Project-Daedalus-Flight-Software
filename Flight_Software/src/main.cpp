@@ -21,7 +21,7 @@
 const bool SIMULATION_MODE = false;
 
 const float movement_ratio = 1.4089; //Converts from motor frame to weight frame
-float motor_frame_offset = -213.66;
+float motor_frame_offset = -435.11;
 float balance_frame_offset = 350;
 float motor_travel_length = 446.83; // in motor frame
 
@@ -262,7 +262,7 @@ void LogLoop(void *pvParameters)
     case States::IDLE:
     {
       statusIndicator.solid(StatusIndicator::BLUE);
-      if (!digitalRead(PinDefs.ARM)) //TODO: Uncomment
+      if (!digitalRead(PinDefs.ARM))
       {
         // state = States::ARMED;
         // prev_pressure = pressure;
@@ -507,6 +507,7 @@ void setup() {
   while (!Serial1){
     statusIndicator.solid(StatusIndicator::RED);
   }
+  statusIndicator.solid(StatusIndicator::GREEN);
 
   pinMode(PinDefs.IGNITER_1, OUTPUT);
   pinMode(PinDefs.IGNITER_0, OUTPUT);
