@@ -5,7 +5,7 @@ const char *stateToString(States state)
     switch (state)
     {
     case INTEGRATING:
-        return "INTEGRATING";
+        return "INT";
     case IDLE:
         return "IDLE";
     case ARMED:
@@ -15,7 +15,7 @@ const char *stateToString(States state)
     case APOGEE:
         return "APOGEE";
     case BELLYFLOP:
-        return "BELLYFLOP";
+        return "BF";
     case CHUTE:
         return "CHUTE";
     case LANDED:
