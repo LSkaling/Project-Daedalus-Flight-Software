@@ -4,26 +4,21 @@
 #include <Lps22.h>
 #include <SPI.h>
 #include <SD.h>
-#include <ACAN2517FD.h>
-#include <Moteus.h>
-#include <MotorRoutines.h>
 #include <PinDefinitions.h>
 #include <StatusIndicator.h>
 #include <Logging.h>
 #include <STM32FreeRTOS.h>
 #include <States.h>
 #include <Igniter.h>
-#include <Clutch.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
 //#include <i2c_scanner.h>
 
 //#define configCHECK_FOR_STACK_OVERFLOW 2 testing
 
 const bool SIMULATION_MODE = false;
-
-const float movement_ratio = 1.4089; //Converts from motor frame to weight frame
-float motor_frame_offset = -435.11;
-float balance_frame_offset = 350;
-float motor_travel_length = 446.83; // in motor frame
 
 SemaphoreHandle_t xSerialMutex;
 SemaphoreHandle_t xMoteusMutex;
@@ -31,11 +26,12 @@ SemaphoreHandle_t xMoteusMutex;
 float x, y, z;
 //float x_hg, y_hg, z_hg;
 
-float theta;
-float theta_dot;
+/* Set the delay between fresh samples */
+uint16_t BNO055_SAMPLERATE_DELAY_MS = 100;
 
-float alpha = 0.5;       // Smoothing factor (adjust based on your needs)
-float filteredTheta = 90; // Initialize the filtered value
+// Check I2C device address and correct line below (by default address is 0x29 or 0x28)
+//                                   id, address
+Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
 
 uint32_t mode;
 float position, velocity, current, torque;
@@ -60,10 +56,9 @@ bool alternateMotorCommand = true;
 
 int millis_at_chute_transition = 0;
 
-// largest value at start
-float apogee_pressure = 20000;
 
-int last_pressure_check_millis = 0;
+int last_sd_write = 0;
+
 
 // const char* logVariables[] = {
 //     "Time",
@@ -82,32 +77,15 @@ int last_pressure_check_millis = 0;
 
 //size_t logSize = sizeof(logVariables) / sizeof(logVariables[0]);
 
-Logging logging(false, false, PinDefs.SD_CS);
-ACAN2517FD can (PinDefs.MCP_CS, SPI, PinDefs.MCP_INT);
+Logging logging(false, true, PinDefs.SD_CS);
 File dataFile;
 Adxl adxl345 = Adxl(0x1D, ADXL345);
 //Adxl adxl375 = Adxl(0x53, ADXL375);
 Lps22 lps22 = Lps22(0x5C);
-Clutch clutch = Clutch(PinDefs.SERVO, 120, 50);
 Igniter primaryIgniter = Igniter(PinDefs.IGNITER_0, PinDefs.IGNITER_SENSE_0);
 Igniter backupIgniter = Igniter(PinDefs.IGNITER_1, PinDefs.IGNITER_SENSE_1);
 StatusIndicator statusIndicator = StatusIndicator(PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
 States state = States::INTEGRATING;
-
-Moteus moteus1(can, []() {
-  Moteus::Options options;
-  options.id = 1;
-  return options;
-}());
-
-
-const float K_P = 10;
-const float K_D = 0.1;
-
-TaskHandle_t FastLoopHandle;
-TaskHandle_t LogLoopHandle;
-TaskHandle_t PrintLoopHandle;
-TaskHandle_t FlushLoopHandle;
 
 // void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 // {
@@ -132,386 +110,69 @@ void splitString(String data, char delimiter, String parts[], int maxParts)
   parts[i] = data; // Last part (or whole if no delimiter left)
 }
 
-float calculateAngle(float ax, float ay, float az)
+void printEvent(sensors_event_t *event)
 {
-  // float magnitude = sqrt(ax * ax + ay * ay + az * az);
-  // float angle = atan2(az, ay);
-  // return angle * (180.0 / 3.14);          // Convert to degrees
-
-  // Calculate the total magnitude of the acceleration vector
-  float magnitude = sqrt(x * x + y * y + z * z);
-
-  // Calculate the tilt angle in radians
-  float tiltAngle = acos(y / magnitude);
-
-  // Convert radians to degrees
-  tiltAngle = tiltAngle * 180.0 / PI;
-  return tiltAngle;
-}
-
-float weight_frame_to_motor_frame(float pos){
-  return pos / movement_ratio + motor_frame_offset;
-}
-float motor_frame_to_weight_frame(float pos){
-  return (pos - motor_frame_offset) * movement_ratio;
-}
-float balance_frame_to_motor_frame(float pos){
-  float pos_offset = pos + balance_frame_offset;
-  return weight_frame_to_motor_frame(pos_offset);
-}
-
-// float calculateAltitude(float pressure, float temperature) //1Pa = 
-// {
-//   float altitude = (1 - pow((pressure / 1013.25), 0.1903)) * 145366.45;
-//   return altitude;
-// }
-
-// Fast Loop (Read sensors, Write motor)
-void FastLoop(void *pvParameters)
-{
-  while (true)
+  double x = -1000000, y = -1000000, z = -1000000; // dumb values, easy to spot problem
+  if (event->type == SENSOR_TYPE_ACCELEROMETER)
   {
-    if (SIMULATION_MODE)
-    {
-      // Request data from serial
-
-      if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
-      {
-
-        Serial1.println("REQ_DATA");
-        while (Serial1.available() == 0)
-        {
-          // statusIndicator.solid(StatusIndicator::RED);
-        }
-        // statusIndicator.solid(StatusIndicator::GREEN);
-        // Serial1.println("Data received");
-        String data = Serial1.readStringUntil('\n');
-        // Serial1.println("Read data");
-        String dataParts[12];
-        splitString(data, ',', dataParts, 12);
-
-        x = dataParts[0].toFloat();
-        // x_hg = dataParts[1].toFloat();
-        y = dataParts[1].toFloat();
-        // y_hg = dataParts[3].toFloat();
-        z = dataParts[2].toFloat();
-        // z_hg = dataParts[5].toFloat();
-        pressure = dataParts[3].toFloat();
-        temperature = dataParts[4].toFloat();
-
-        xSemaphoreGive(xSerialMutex);
-      }
-    }
-    else
-    {
-      adxl345.readAccelerometer(&x, &y, &z);
-      //adxl375.readAccelerometer(&x_hg, &y_hg, &z_hg);
-
-      lps22.readPressure(&pressure);
-      lps22.readTemperature(&temperature);
-
-      // float new_altitude = calculateAltitude(pressure, temperature);
-      // vertical_velocity = (new_altitude - altitude) / 0.02;
-      // altitude = new_altitude;
-   }
-
-   if (xSemaphoreTake(xMoteusMutex, portMAX_DELAY) == pdTRUE)
-   {
-     Moteus::Result lastResult = moteus1.last_result();
-     mode = static_cast<uint32_t>(lastResult.values.mode);
-     velocity = lastResult.values.velocity;
-     position = lastResult.values.position;
-     current = lastResult.values.q_current;
-     torque = lastResult.values.torque;
-
-     if (mode == 11)
-     {
-       Serial1.println("Mode 11");
-       moteus1.SetStop();
-     }
-
-     xSemaphoreGive(xMoteusMutex);
-   }
-   theta = calculateAngle(x, y, z);
-
-   vTaskDelay(20); // Run at 50hz
+    Serial1.print("Accl:");
+    x = event->acceleration.x;
+    y = event->acceleration.y;
+    z = event->acceleration.z;
   }
-}
-
-// 20 Hz Logging Task
-void LogLoop(void *pvParameters)
-{
-  while (true)
+  else if (event->type == SENSOR_TYPE_ORIENTATION)
   {
-    switch (state)
-    {
-    case States::INTEGRATING:
-    {
-      statusIndicator.solid(StatusIndicator::ORANGE);
-      clutch.disengage();
-      if (digitalRead(PinDefs.ARM))
-      {
-        state = States::IDLE;
-      }
-      break;
-    }
-    case States::IDLE:
-    {
-      statusIndicator.solid(StatusIndicator::BLUE);
-      if (!digitalRead(PinDefs.ARM))
-      {
-        state = States::ARMED;
-        // prev_pressure = pressure;
-        // two_prev_pressure = pressure;
-        // state = States::BELLYFLOP;
-
-        // pressure_at_liftoff = pressure;
-        // millis_at_liftoff = millis();
-        // state = States::FLIGHT;
-      }
-      break;
-    }
-
-    case States::ARMED:
-    {
-      statusIndicator.solid(StatusIndicator::GREEN);
-      clutch.begin();
-      clutch.engage();
-
-      // check every 10 seconds:
-      if (millis() - last_pressure_check_millis > 10000)
-      {
-        last_pressure_check_millis = millis();
-        two_prev_pressure = prev_pressure;
-        prev_pressure = pressure;
-        }
-
-        float pressure_change = two_prev_pressure - pressure;
-
-        if (digitalRead(PinDefs.ARM))
-        {
-          state = States::IDLE;
-        }
-
-        if (y > 6 || (pressure_change > 1 && y > 2) || pressure_change > 2)
-        {
-          state = States::FLIGHT;
-          pressure_at_liftoff = two_prev_pressure;
-          millis_at_liftoff = millis();
-        }
-
-        //TODO: REMOVE:
-        // state = States::FLIGHT;
-        // pressure_at_liftoff = two_prev_pressure;
-        // millis_at_liftoff = millis();
-
-        break;
-      }
-
-    case States::FLIGHT:
-    {
-      statusIndicator.solid(StatusIndicator::RED);
-
-      if (pressure < apogee_pressure)
-      {
-        apogee_pressure = pressure;
-      }
-
-      if (millis() - millis_at_liftoff > 15000 || (pressure - apogee_pressure > 1 && millis() - millis_at_liftoff > 10000))
-      {
-        state = States::APOGEE;
-      }
-      break;
-    }
-
-    case States::APOGEE:
-
-    {
-      clutch.disengage();
-      MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(0), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
-
-      if (mode == 10)
-      {
-        state = States::BELLYFLOP;
-      }
-      else
-      {
-        state = States::CHUTE;
-      }
-
-      break;
-    }
-
-    case States::BELLYFLOP:
-    {
-      float new_theta = calculateAngle(x, y, z);
-      theta_dot = (new_theta - theta) / 0.02;
-      theta = new_theta;
-
-      filteredTheta = alpha * theta + (1 - alpha) * filteredTheta;
-
-      float theta_error = -filteredTheta + 90;
-
-      float weight_position = theta_error * K_P + theta_dot * K_D; // TODO: Add scaling for acceleration
-
-      //float weight_position = 0;
-      // if(alternateMotorCommand){
-        if (xSemaphoreTake(xMoteusMutex, portMAX_DELAY) == pdTRUE)
-        {
-          MotorRoutines::moveToPosition(moteus1, balance_frame_to_motor_frame(weight_position), 600, 0.1, 400, motor_frame_offset + 10, motor_frame_offset + motor_travel_length - 10); // For light weight was 500, 0.2, 800,
-          xSemaphoreGive(xMoteusMutex);
-        }
-      // }
-
-      // alternateMotorCommand = !alternateMotorCommand;
-
-
-      if (pressure_at_liftoff - pressure < 20 || millis() - millis_at_liftoff > 50000) //TODO: Add back
-      {
-        state = States::CHUTE;
-        millis_at_chute_transition = millis();
-      }
-
-      // if (millis() - millis_at_liftoff > 40000) //TODO: Add back
-      // {
-      //   state = States::CHUTE;
-      //   millis_at_chute_transition = millis();
-      // }
-
-        break;
-    }
-
-    case States::CHUTE:
-    {
-      clutch.engage();
-      if (millis() - millis_at_chute_transition > 200)
-      {
-        if (millis() - millis_at_chute_transition < 1000)
-        {
-          digitalWrite(PinDefs.IGNITER_0, HIGH);
-        }
-        else if (millis() - millis_at_chute_transition < 2000)
-        {
-          digitalWrite(PinDefs.IGNITER_0, LOW);
-          digitalWrite(PinDefs.IGNITER_1, HIGH);
-        }
-        else{
-          digitalWrite(PinDefs.IGNITER_1, LOW);
-          clutch.disengage();
-        }
-      }
-      break;
-    }
-
-    case States::LANDED:
-      /* code */
-      break;
-    }
-    vTaskDelay(50); // 50 ms = 20 Hz
+    Serial1.print("Orient:");
+    x = event->orientation.x;
+    y = event->orientation.y;
+    z = event->orientation.z;
   }
-}
-
-// 5 Hz Print and State Update Task
-void PrintLoop(void *pvParameters)
-{
-  while (true)
+  else if (event->type == SENSOR_TYPE_MAGNETIC_FIELD)
   {
-    // if(millis() % 2000 < 1000){
-    //   statusIndicator.solid(StatusIndicator::RED);
-    // } else{
-    //   statusIndicator.solid(StatusIndicator::BLUE);
-    // }
-    if(xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE){
-
-        Serial1.print(millis());
-        Serial1.print("\t");
-        Serial1.print(stateToString(state));
-        Serial1.print("\t");
-        Serial1.print(x, 3);
-        // Serial1.print("\t");
-        // Serial1.print(x_hg, 3);
-        Serial1.print("\t");
-        Serial1.print(y, 3);
-        // Serial1.print("\t");
-        // Serial1.print(y_hg, 3);
-        Serial1.print("\t");
-        Serial1.print(z, 3);
-        // Serial1.print("\t");
-        // Serial1.print(z_hg, 3);
-        Serial1.print("\t");
-        Serial1.print(theta, 3);
-        Serial1.print("\t");
-        Serial1.print(pressure);
-        Serial1.print("\t");
-        Serial1.print(temperature);
-        Serial1.print("\t");
-        Serial1.print(mode);
-        Serial1.print("\t");
-        Serial1.print(motor_frame_to_weight_frame(position));
-        Serial1.print("\t");
-        Serial1.print(velocity);
-        Serial1.print("\t");
-        Serial1.print(current);
-        Serial1.print("\t");
-        Serial1.print(torque, 3);
-        Serial1.print("\t");
-        Serial1.print(altitude);
-
-        // Serial1.print("\t");
-        // Serial1.print(xPortGetFreeHeapSize());
-        // Serial1.print("\t");
-        // Serial1.print(uxTaskGetStackHighWaterMark(FastLoopHandle));
-        // Serial1.print("\t");
-        // Serial1.print(uxTaskGetStackHighWaterMark(LogLoopHandle));
-        // Serial1.print("\t");
-        // Serial1.print(uxTaskGetStackHighWaterMark(PrintLoopHandle));
-        // Serial1.print("\t");
-        // Serial1.print(uxTaskGetStackHighWaterMark(FlushLoopHandle));
-        Serial1.println();
-
-        //convert to string to log message
-
-        const String logMessage = String(millis()) + "\t" +
-                                  stateToString(state) + "\t" +
-                                  String(x) + "\t" +
-                                  String(y) + "\t" +
-                                  String(z) + "\t" +
-                                  String(theta) + "\t" +
-                                  String(pressure) + "\t" +
-                                  String(temperature) + "\t" +
-                                  String(mode) + "\t" +
-                                  String(motor_frame_to_weight_frame(position)) + "\t" +
-                                  String(velocity) + "\t" +
-                                  String(current) + "\t" +
-                                  String(torque) + "\t" +
-                                  String(altitude);
-        logging.log(logMessage.c_str());
-        
-
-        xSemaphoreGive(xSerialMutex);
-    }
-    vTaskDelay(250); // 200 ms = 5 Hz
-    }
-}
-
-// 0.5 Hz SD Card Flush Task
-void FlushLoop(void *pvParameters)
-{
-  while (true)
+    Serial1.print("Mag:");
+    x = event->magnetic.x;
+    y = event->magnetic.y;
+    z = event->magnetic.z;
+  }
+  else if (event->type == SENSOR_TYPE_GYROSCOPE)
   {
-    logging.flush();
-    if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE)
-    {
-      Serial1.println("ms\tmode\tx\ty\tz\ttheta\tp\tt\tmode\tpos\tvel\tI\tT\talt");
-      Serial1.print("FastLoop stack high watermark: ");
-      Serial1.println(uxTaskGetStackHighWaterMark(FastLoopHandle));
+    Serial1.print("Gyro:");
+    x = event->gyro.x;
+    y = event->gyro.y;
+    z = event->gyro.z;
+  }
+  else if (event->type == SENSOR_TYPE_ROTATION_VECTOR)
+  {
+    Serial1.print("Rot:");
+    x = event->gyro.x;
+    y = event->gyro.y;
+    z = event->gyro.z;
+  }
+  else if (event->type == SENSOR_TYPE_LINEAR_ACCELERATION)
+  {
+    Serial1.print("Linear:");
+    x = event->acceleration.x;
+    y = event->acceleration.y;
+    z = event->acceleration.z;
+  }
+  else if (event->type == SENSOR_TYPE_GRAVITY)
+  {
+    Serial1.print("Gravity:");
+    x = event->acceleration.x;
+    y = event->acceleration.y;
+    z = event->acceleration.z;
+  }
+  else
+  {
+    Serial1.print("Unk:");
+  }
 
-      Serial1.print("LogLoop stack high watermark: ");
-      Serial1.println(uxTaskGetStackHighWaterMark(LogLoopHandle));
-      xSemaphoreGive(xSerialMutex);
-    }
-      vTaskDelay(2000); // 2000 ms = 0.5 Hz
-    }
+  Serial1.print("\tx= ");
+  Serial1.print(x);
+  Serial1.print(" |\ty= ");
+  Serial1.print(y);
+  Serial1.print(" |\tz= ");
+  Serial1.println(z);
 }
 
 void setup() {
@@ -524,7 +185,7 @@ void setup() {
   while (!Serial1){
     statusIndicator.solid(StatusIndicator::RED);
   }
-  statusIndicator.solid(StatusIndicator::GREEN);
+  statusIndicator.solid(StatusIndicator::RED);
 
   pinMode(PinDefs.IGNITER_1, OUTPUT);
   pinMode(PinDefs.IGNITER_0, OUTPUT);
@@ -537,21 +198,6 @@ void setup() {
 
   //scanI2CDevices();
 
-  if(SIMULATION_MODE){
-    while(true){
-      Serial1.println("PING");
-      if(Serial1.available() == 0){
-        delay(1000);
-      }else{
-        String response = Serial1.readStringUntil('\n');
-        if(response == "TRUE"){
-          Serial1.println("Simulation initialized");
-          break;
-        }
-      }
-    }
-  }
-
   SPI.setMOSI(PinDefs.SDI);
   SPI.setMISO(PinDefs.SDO);
   SPI.setSCLK(PinDefs.SCK); 
@@ -561,22 +207,6 @@ void setup() {
     statusIndicator.solid(StatusIndicator::RED);
     delay(1000);
   }
-
-  ACAN2517FDSettings settings(
-      ACAN2517FDSettings::OSC_40MHz, 1000ll * 1000ll, DataBitRateFactor::x1);  
-
-  const uint32_t errorCode = can.begin(settings, [] { can.isr(); });
-
-  while (errorCode != 0) {
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "CAN err: %ld", errorCode); //TODO: Doesn't work
-    logging.log(buffer);
-    delay(1000);
-  }      
-
-  // To clear any faults the controllers may have, we start by sending
-  // a stop command to each.
-  moteus1.SetStop();
 
 
   while (!adxl345.begin()) {
@@ -594,96 +224,103 @@ void setup() {
     delay(1000);
   }
 
+  if (!bno.begin())
+  {
+    /* There was a problem detecting the BNO055 ... check your connections */
+    Serial1.print("ERRBNO");
+    while(true);
+  }
+
+  const String logHeading = "Time\tXg\tYg\tZg\tPressure\tTemperature\tOrientX\tOrientY\tOrientZ\tGyroX\tGyroY\tGyroZ\tLinearX\tLinearY\tLinearZ\tMagX\tMagY\tMagZ\tAccelX\tAccelY\tAccelZ\tGravityX\tGravityY\tGravityZ\tBoardTemp\tSysCal\tGyroCal\tAccelCal\tMagCal";
+  logging.log(logHeading.c_str());
+
   logging.flush();
-
-//  uncomment to measure motor travel distance after power cycle
-  motor_frame_offset = MotorRoutines::runToEnd(moteus1, -50, 2);
-  Serial1.println("Motor frame offset: " + String(motor_frame_offset));
-  MotorRoutines::moveToPositionBlocking(moteus1, motor_frame_offset + motor_travel_length - 10, 50, 3);
-
-  // for (int i = 0; i < 400; i+=50)
-  // {
-  //   float motor_frame = weight_frame_to_motor_frame(i);
-  //   MotorRoutines::moveToPositionBlocking(moteus1, motor_frame, 50, 3);
-  //   delay(5000);
-  // }
-
-  // MotorRoutines::moveToPositionBlocking(moteus1, weight_frame_to_motor_frame(0), 50, 3);
-  // MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(0), 50, 3);
-
-  // delay(5000);
-
-  // MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(50), 50, 3);
-
-  // delay(5000);
-
-  // MotorRoutines::moveToPositionBlocking(moteus1, balance_frame_to_motor_frame(-50), 50, 3);
-
-  // //Calibrate motor distance
-  // MotorRoutines::runToEnd(moteus1, 5, 0.5);
-  // float motor_travel_distance = MotorRoutines::measureTravelDistance(moteus1, 50, 3);
-  // Serial1.println("Motor travel distance: " + String(motor_travel_distance));
-
-  // Moteus::Result lastResult = moteus1.last_result();
-  // // mode = lastResult.values.mode; //TODO: how to get value associated with enum?
-  // position = lastResult.values.position;
-
-  // // run motor to center
-  // float center_position = motor_offset + motor_travel_distance / 2;
-  // MotorRoutines::moveToPositionBlocking(moteus1, center_position, 50, 15);
-
-  // run motor to 0
-  // MotorRoutines::moveToPositionBlocking(moteus1, 0, 50, 15);
-  // delay(5000);
-  // MotorRoutines::moveToPositionBlocking(moteus1, 100, 50, 15);
-  // delay(5000);
-
-  // Serial1.println("Motor location:");
-  // Serial1.println(moteus1.last_result().values.position);
-
-  clutch.disengage();
-
-  // Serial1.println("Motor offset: " + String(motor_offset));
-  // Serial1.println("Motor travel distance: " + String(motor_travel_distance));
-
-  Serial1.println("Motor routine complete");
-
-  // Create tasks
-  xSerialMutex = xSemaphoreCreateMutex();
-  xMoteusMutex = xSemaphoreCreateMutex();
-  Serial1.print("Free heap before tasks: ");
-  Serial1.println(xPortGetFreeHeapSize());
-
-  if (xTaskCreate(FastLoop, "FastLoop", 256, NULL, 3, &FastLoopHandle) != pdPASS)
-  {
-    Serial1.println("ErrX");
-    while (1);
-  }
-  if (xTaskCreate(LogLoop, "LogLoop", 384, NULL, 2, &LogLoopHandle) != pdPASS)
-  {
-    Serial1.println("ErrX");
-    while (1);
-  }
-  if (xTaskCreate(PrintLoop, "PrintLoop", 128, NULL, 1, &PrintLoopHandle) != pdPASS)
-  {
-    Serial1.println("ErrX");
-    while (1);
-  }
-  if (xTaskCreate(FlushLoop, "FlushLoop", 64, NULL, 1, &FlushLoopHandle) != pdPASS)
-  {
-    Serial1.println("ErrX");
-    while (1);
-  }
 
   statusIndicator.solid(StatusIndicator::GREEN);
 
   Serial1.println("Setup complete");
 
-  // Start FreeRTOS scheduler
-  vTaskStartScheduler();
 }
 
 void loop() {
+  adxl345.readAccelerometer(&x, &y, &z);
+  // adxl375.readAccelerometer(&x_hg, &y_hg, &z_hg);
+
+  lps22.readPressure(&pressure);
+  lps22.readTemperature(&temperature);
+
+  sensors_event_t orientationData, angVelocityData, linearAccelData, magnetometerData, accelerometerData, gravityData;
+  bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
+  bno.getEvent(&angVelocityData, Adafruit_BNO055::VECTOR_GYROSCOPE);
+  bno.getEvent(&linearAccelData, Adafruit_BNO055::VECTOR_LINEARACCEL);
+  bno.getEvent(&magnetometerData, Adafruit_BNO055::VECTOR_MAGNETOMETER);
+  bno.getEvent(&accelerometerData, Adafruit_BNO055::VECTOR_ACCELEROMETER);
+  bno.getEvent(&gravityData, Adafruit_BNO055::VECTOR_GRAVITY);
+
+  printEvent(&orientationData);
+  printEvent(&angVelocityData);
+  printEvent(&linearAccelData);
+  printEvent(&magnetometerData);
+  printEvent(&accelerometerData);
+  printEvent(&gravityData);
+
+  int8_t boardTemp = bno.getTemp();
+  Serial1.println();
+  Serial1.print(F("temperature: "));
+  Serial1.println(boardTemp);
+
+  uint8_t system, gyro, accel, mag = 0;
+  bno.getCalibration(&system, &gyro, &accel, &mag);
+  Serial1.println();
+  Serial1.print("Calibration: Sys=");
+  Serial1.print(system);
+  Serial1.print(" Gyro=");
+  Serial1.print(gyro);
+  Serial1.print(" Accel=");
+  Serial1.print(accel);
+  Serial1.print(" Mag=");
+  Serial1.println(mag);
+
+  Serial1.println("--");
+  delay(BNO055_SAMPLERATE_DELAY_MS);
+
+  const String logMessage = String(millis()) + "\t" +
+                            String(x) + "\t" +
+                            String(y) + "\t" +
+                            String(z) + "\t" +
+                            String(pressure) + "\t" +
+                            String(temperature) + "\t" +
+                            String(orientationData.orientation.x) + "\t" +
+                            String(orientationData.orientation.y) + "\t" +
+                            String(orientationData.orientation.z) + "\t" +
+                            String(angVelocityData.gyro.x) + "\t" +
+                            String(angVelocityData.gyro.y) + "\t" +
+                            String(angVelocityData.gyro.z) + "\t" +
+                            String(linearAccelData.acceleration.x) + "\t" +
+                            String(linearAccelData.acceleration.y) + "\t" +
+                            String(linearAccelData.acceleration.z) + "\t" +
+                            String(magnetometerData.magnetic.x) + "\t" +
+                            String(magnetometerData.magnetic.y) + "\t" +
+                            String(magnetometerData.magnetic.z) + "\t" +
+                            String(accelerometerData.acceleration.x) + "\t" +
+                            String(accelerometerData.acceleration.y) + "\t" +
+                            String(accelerometerData.acceleration.z) + "\t" +
+                            String(gravityData.acceleration.x) + "\t" +
+                            String(gravityData.acceleration.y) + "\t" +
+                            String(gravityData.acceleration.z) + "\t" +
+                            String(boardTemp) + "\t" +
+                            String(system) + "\t" +
+                            String(gyro) + "\t" +
+                            String(accel) + "\t" +
+                            String(mag);
+  logging.log(logMessage.c_str());
 
   
+  if (millis() - last_sd_write > 1000) {
+    logging.flush();
+    last_sd_write = millis();
+    Serial1.println("Flushed");
+  }
+
+  delay(10);
 }
