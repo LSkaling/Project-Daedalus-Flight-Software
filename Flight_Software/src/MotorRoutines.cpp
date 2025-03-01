@@ -118,10 +118,13 @@ void MotorRoutines::moveToPositionBlocking(Moteus &motor, float position, float 
     Moteus::PositionMode::Command cmd;
     cmd.position = position;
     cmd.velocity = NaN;
+    
 
     Moteus::PositionMode::Format format;
     format.velocity_limit = Moteus::kFloat;
     cmd.velocity_limit = velocity;
+    format.maximum_torque = Moteus::kFloat;
+    cmd.maximum_torque = 5;
 
     motor.SetPosition(cmd, &format);
 

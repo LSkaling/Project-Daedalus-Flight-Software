@@ -41,7 +41,7 @@ int Logging::getNextLogFileNumber()
     return logNumber + 1;
 }
 
-bool Logging::begin(const char* names[], size_t size)
+bool Logging::begin()
 {
     if (debug)
     {

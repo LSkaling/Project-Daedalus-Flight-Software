@@ -16,9 +16,9 @@
 #include <Clutch.h>
 //#include <i2c_scanner.h>
 
-//#define configCHECK_FOR_STACK_OVERFLOW 2
+//#define configCHECK_FOR_STACK_OVERFLOW 2 testing
 
-const bool SIMULATION_MODE = true;
+const bool SIMULATION_MODE = false;
 
 const float movement_ratio = 1.4089; //Converts from motor frame to weight frame
 float motor_frame_offset = -435.11;
@@ -65,22 +65,22 @@ float apogee_pressure = 20000;
 
 int last_pressure_check_millis = 0;
 
-const char* logVariables[] = {
-    "Time",
-    "Xg",
-    "Xg2",
-    "Yg",
-    "Yg2",
-    "Zg",
-    "Zg2",
-    "Pressure",
-    "Temperature",
-    "Mode",
-    "Position",
-    "Velocity"
-};
+// const char* logVariables[] = {
+//     "Time",
+//     "Xg",
+//     "Xg2",
+//     "Yg",
+//     "Yg2",
+//     "Zg",
+//     "Zg2",
+//     "Pressure",
+//     "Temperature",
+//     "Mode",
+//     "Position",
+//     "Velocity"
+// };
 
-size_t logSize = sizeof(logVariables) / sizeof(logVariables[0]);
+//size_t logSize = sizeof(logVariables) / sizeof(logVariables[0]);
 
 Logging logging(false, false, PinDefs.SD_CS);
 ACAN2517FD can (PinDefs.MCP_CS, SPI, PinDefs.MCP_INT);
@@ -261,25 +261,29 @@ void LogLoop(void *pvParameters)
       if (!digitalRead(PinDefs.ARM))
       {
         state = States::ARMED;
-        prev_pressure = pressure;
-        two_prev_pressure = pressure;
+        // prev_pressure = pressure;
+        // two_prev_pressure = pressure;
         // state = States::BELLYFLOP;
+
+        // pressure_at_liftoff = pressure;
+        // millis_at_liftoff = millis();
+        // state = States::FLIGHT;
       }
       break;
     }
 
     case States::ARMED:
     {
-        statusIndicator.solid(StatusIndicator::GREEN);
-        clutch.begin();
-        clutch.engage();
+      statusIndicator.solid(StatusIndicator::GREEN);
+      clutch.begin();
+      clutch.engage();
 
-        // check every 10 seconds:
-        if (millis() - last_pressure_check_millis > 10000)
-        {
-          last_pressure_check_millis = millis();
-          two_prev_pressure = prev_pressure;
-          prev_pressure = pressure;
+      // check every 10 seconds:
+      if (millis() - last_pressure_check_millis > 10000)
+      {
+        last_pressure_check_millis = millis();
+        two_prev_pressure = prev_pressure;
+        prev_pressure = pressure;
         }
 
         float pressure_change = two_prev_pressure - pressure;
@@ -295,6 +299,11 @@ void LogLoop(void *pvParameters)
           pressure_at_liftoff = two_prev_pressure;
           millis_at_liftoff = millis();
         }
+
+        //TODO: REMOVE:
+        // state = States::FLIGHT;
+        // pressure_at_liftoff = two_prev_pressure;
+        // millis_at_liftoff = millis();
 
         break;
       }
@@ -357,13 +366,19 @@ void LogLoop(void *pvParameters)
       // alternateMotorCommand = !alternateMotorCommand;
 
 
-      // if (pressure_at_liftoff - pressure < 20)
+      if (pressure_at_liftoff - pressure < 20 || millis() - millis_at_liftoff > 50000) //TODO: Add back
+      {
+        state = States::CHUTE;
+        millis_at_chute_transition = millis();
+      }
+
+      // if (millis() - millis_at_liftoff > 40000) //TODO: Add back
       // {
       //   state = States::CHUTE;
       //   millis_at_chute_transition = millis();
       // }
 
-      break;
+        break;
     }
 
     case States::CHUTE:
@@ -380,7 +395,10 @@ void LogLoop(void *pvParameters)
           digitalWrite(PinDefs.IGNITER_0, LOW);
           digitalWrite(PinDefs.IGNITER_1, HIGH);
         }
-        digitalWrite(PinDefs.IGNITER_1, LOW);
+        else{
+          digitalWrite(PinDefs.IGNITER_1, LOW);
+          clutch.disengage();
+        }
       }
       break;
     }
@@ -501,6 +519,7 @@ void setup() {
 
   pinMode(PinDefs.ARM, INPUT_PULLUP);
   pinMode(PinDefs.IGNITER_0, OUTPUT);
+  pinMode(PinDefs.IGNITER_1, OUTPUT);
 
   while (!Serial1){
     statusIndicator.solid(StatusIndicator::RED);
@@ -538,7 +557,7 @@ void setup() {
   SPI.setSCLK(PinDefs.SCK); 
   SPI.begin();  
 
-  while (logging.begin(logVariables, logSize) == false) {
+  while (logging.begin() == false) {
     statusIndicator.solid(StatusIndicator::RED);
     delay(1000);
   }
@@ -578,8 +597,9 @@ void setup() {
   logging.flush();
 
 //  uncomment to measure motor travel distance after power cycle
-  // motor_frame_offset = MotorRoutines::runToEnd(moteus1, -20, 2);
-  // Serial1.println("Motor frame offset: " + String(motor_frame_offset));
+  motor_frame_offset = MotorRoutines::runToEnd(moteus1, -50, 2);
+  Serial1.println("Motor frame offset: " + String(motor_frame_offset));
+  MotorRoutines::moveToPositionBlocking(moteus1, motor_frame_offset + motor_travel_length - 10, 50, 3);
 
   // for (int i = 0; i < 400; i+=50)
   // {

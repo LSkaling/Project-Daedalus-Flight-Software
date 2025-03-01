@@ -10,7 +10,7 @@ public:
 
     void log(const char* message);
 
-    bool begin(const char *names[], size_t size);
+    bool begin();
 
     void flush();
 
